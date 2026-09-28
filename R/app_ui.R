@@ -27,7 +27,10 @@ app_ui <- function(access_level = "faculty", paths_app_url = NULL) {
         dev_mode_toggle_button(),
         dev_mode_access_level_select(selected = access_level)
       ),
-      bslib::nav_panel(title = NULL, module_schedule_ui("schedule")),
+      bslib::nav_panel(
+        title = NULL,
+        module_schedule_ui("schedule", access_level = access_level)
+      ),
       bslib::nav_spacer(),
       if (!is.null(paths_app_url)) {
         bslib::nav_item(

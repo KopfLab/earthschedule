@@ -108,14 +108,23 @@ module_schedule_server <- function(id, data, get_access_level) {
         purrr::walk(~ shinyjs::toggle(.x, condition = can_edit()))
     })
 
-    # the instructor selection is not available in student mode
+    # the instructor selection is only available in faculty mode and the
+    # actions sidebar is not available in student mode
     observeEvent(get_access_level(), {
+      is_faculty <- get_access_level() == "faculty"
       is_student <- get_access_level() == "student"
-      shinyjs::toggle("instructor_select", condition = !is_student)
-      shinyjs::toggle("footer_edit_info", condition = !is_student)
-      if (is_student && !is.null(values$instructor_id)) {
+      shinyjs::toggle("instructor_select", condition = is_faculty)
+      if (!is_faculty && !is.null(values$instructor_id)) {
+        values$instructor_id <- NULL
+        values$instructor <- NULL
         updateSelectizeInput(session, "instructor_id", selected = "NA")
       }
+      bslib::toggle_sidebar("actions_sidebar", open = !is_student)
+      shinyjs::toggleClass(
+        "schedule_box",
+        class = "no-actions",
+        condition = is_student
+      )
     })
 
     # selected terms
@@ -329,32 +338,6 @@ module_schedule_server <- function(id, data, get_access_level) {
             }
           })
         ),
-        div(
-          id = ns("instructor_select"),
-          style = if (isolate(get_access_level()) == "student") {
-            "display: none;"
-          },
-          selectizeInput(
-            ns("instructor_id"),
-            "Select instructor to schedule:",
-            multiple = FALSE,
-            choices = c(
-              list("Show all" = NA_character_),
-              get_active_ERTH_instructors()
-            ),
-            selected = isolate({
-              if (
-                !is.null(values$instructor_id) &&
-                  values$instructor_id %in%
-                    as.character(get_active_ERTH_instructors())
-              ) {
-                values$instructor_id
-              } else {
-                NA_character_
-              }
-            })
-          )
-        ),
         checkboxGroupInput(
           ns("show_options"),
           "Select information to display:",
@@ -368,6 +351,32 @@ module_schedule_server <- function(id, data, get_access_level) {
           ),
           selected = c("Day/Time", "Location", "Enrollment")
         )
+      )
+    })
+
+    # instructor selection GUI (faculty only)
+    output$instructor_select_ui <- renderUI({
+      req(get_active_ERTH_instructors())
+      selectizeInput(
+        ns("instructor_id"),
+        "Select your name to change your schedule:",
+        multiple = FALSE,
+        width = "100%",
+        choices = c(
+          list("Show all" = NA_character_),
+          get_active_ERTH_instructors()
+        ),
+        selected = isolate({
+          if (
+            !is.null(values$instructor_id) &&
+              values$instructor_id %in%
+                as.character(get_active_ERTH_instructors())
+          ) {
+            values$instructor_id
+          } else {
+            NA_character_
+          }
+        })
       )
     })
 
@@ -483,62 +492,113 @@ module_schedule_server <- function(id, data, get_access_level) {
 
     # process record selection ================
 
-    # (re-evaluated when the access level changes as it affects what can be edited)
-    observeEvent(
-      list(schedule_table$get_selected_cells(), get_access_level()),
-      {
-        # disable edit buttons
-        c("delete_leave", "add_class", "edit_class", "delete_class") |>
-          purrr::walk(shinyjs::disable)
-
-        # process selection
-        if (rlang::is_empty(schedule_table$get_selected_ids())) {
-          # nothing selected, enable just the add class button
-          log_debug(ns = ns, "nothing selected")
-          values$edit <- list()
-          shinyjs::enable("add_class")
-        } else if (
+    # store the information of the selected cell (whether it can be modified
+    # is checked when an action button is pressed, see check_edit())
+    observeEvent(schedule_table$get_selected_cells(), {
+      if (
+        !rlang::is_empty(schedule_table$get_selected_ids()) &&
           check_terms(as.character(schedule_table$get_selected_cells()))
-        ) {
-          # something selected that's a valid term, figure out what to enable
-          log_debug(ns = ns, "new cell selected")
+      ) {
+        log_debug(ns = ns, "new cell selected")
+        selected_items <- schedule_table$get_selected_items()
+        selected_term <- as.character(schedule_table$get_selected_cells())
+        values$edit <- list(
+          instructor_id = selected_items$instructor_id,
+          instructor = selected_items$Instructor,
+          class = as.character(selected_items$class),
+          term = selected_term,
+          info = selected_items[[selected_term]]
+        )
+      } else {
+        log_debug(ns = ns, "nothing selected")
+        values$edit <- list()
+      }
+    })
 
-          # build the edit information
-          selected_items <- schedule_table$get_selected_items()
-          selected_term <- as.character(schedule_table$get_selected_cells())
-          values$edit <- list(
-            instructor_id = selected_items$instructor_id,
-            instructor = selected_items$Instructor,
-            class = as.character(selected_items$class),
-            term = selected_term,
-            info = selected_items[[selected_term]]
+    # check whether an action is possible for the selected cell, returns NULL
+    # if it is, otherwise the reason why not
+    # @param action one of add_class, edit_class, delete_class, add_leave, delete_leave
+    check_edit <- function(action) {
+      edit <- values$edit
+      has_cell <- length(edit) > 0
+      is_future <- has_cell && is_term_after(edit$term)
+      is_own <- has_cell && can_edit_instructor(edit$instructor_id)
+      is_leave <- has_cell && edit$info %in% get_reasons()
+      is_class <- has_cell &&
+        !is_leave &&
+        !edit$info %in% c("no", "?", "canceled")
+      is_confirmed <- is_class && !stringr::str_detect(edit$info, "^<i>")
+      verb <- c(edit_class = "edit", delete_class = "unschedule")[action]
+
+      if (action == "add_class") {
+        if (has_cell && !is_future) {
+          return("Cannot schedule a course in the past.")
+        }
+      } else if (action == "add_leave") {
+        if (has_cell && !is_future) {
+          return("Cannot add a teaching absence in the past.")
+        }
+      } else if (action %in% c("edit_class", "delete_class")) {
+        if (!is_class) {
+          return(sprintf(
+            "Please first select the class you want to %s in the table.",
+            verb
+          ))
+        } else if (!is_future) {
+          return(sprintf("Cannot %s a class that's in the past.", verb))
+        } else if (is_confirmed) {
+          return(sprintf(
+            "Cannot %s a class already confirmed by the UPA.",
+            verb
+          ))
+        } else if (!is_own) {
+          return(sprintf("You can only %s your own classes.", verb))
+        }
+      } else if (action == "delete_leave") {
+        if (!is_leave) {
+          return(
+            "Please first select the teaching absence you want to delete in the table."
           )
-
-          # check if it is a future record that the access level allows editing
-          if (
-            is_term_after(values$edit$term) &&
-              can_edit_instructor(values$edit$instructor_id)
-          ) {
-            # allow adding other classes (even if already one there or a teaching absence)
-            shinyjs::enable("add_class")
-
-            if (values$edit$info %in% get_reasons()) {
-              # enable delete for absence record
-              log_debug(ns = ns, "selected a teaching absence cell")
-              shinyjs::enable("delete_leave")
-            } else if (stringr::str_detect(values$edit$info, "^<i>")) {
-              # enable edit/delete for unconfirmed class
-              log_debug(ns = ns, "selected an editable class")
-              shinyjs::enable("edit_class")
-              shinyjs::enable("delete_class")
-            }
-          }
-        } else {
-          # all other scenarios
-          values$edit <- list()
+        } else if (!is_future) {
+          return("Cannot delete a teaching absence that's in the past.")
+        } else if (!is_own) {
+          return("You can only delete your own teaching absences.")
         }
       }
-    )
+      return(NULL)
+    }
+
+    # check an action, shows a warning dialog and returns FALSE if the action
+    # is not possible
+    check_edit_or_warn <- function(action) {
+      msg <- check_edit(action)
+      if (is.null(msg)) {
+        return(TRUE)
+      }
+      log_debug(ns = ns, action, " not possible: ", msg)
+      showModal(
+        modalDialog(
+          title = "Cannot modify the schedule",
+          easyClose = TRUE,
+          h5(msg),
+          p(
+            "Modifications are only possible for future semesters (highlighted in ",
+            tags$span(style = "background-color: yellow;", "yellow"),
+            ") and classes that have not yet been confirmed by the UPA (shown in ",
+            HTML("<i><u>underlined italics</u></i>"),
+            "). To modify anything else, please contact our UPA at ",
+            tags$a(
+              href = "mailto:geoupa@colorado.edu",
+              target = "_new",
+              "geoupa@colorado.edu"
+            ),
+            "."
+          ),
+          footer = modalButton("OK")
+        )
+      )
+      return(FALSE)
+    }
 
     # add leave dialog =========
     add_leave_dialog_inputs <- reactive({
@@ -580,6 +640,7 @@ module_schedule_server <- function(id, data, get_access_level) {
     # add leave ==============
     observeEvent(input$add_leave, {
       req(can_edit())
+      req(check_edit_or_warn("add_leave"))
       data$not_teaching$start_add()
       # modal dialog
       dlg <- modalDialog(
@@ -653,6 +714,7 @@ module_schedule_server <- function(id, data, get_access_level) {
     # delete leave ============
     observeEvent(input$delete_leave, {
       req(can_edit())
+      req(check_edit_or_warn("delete_leave"))
       showModal(
         modalDialog(
           title = "Delete teaching absence",
@@ -678,6 +740,7 @@ module_schedule_server <- function(id, data, get_access_level) {
 
     observeEvent(input$delete_leave_confirm, {
       req(can_edit())
+      req(is.null(check_edit("delete_leave")))
       # pull out record
       record <- get_not_teaching() |>
         dplyr::filter(
@@ -728,10 +791,10 @@ module_schedule_server <- function(id, data, get_access_level) {
           "Instructor",
           multiple = FALSE,
           choices = c("Select instructor" = "", get_active_ERTH_instructors()),
-          selected = if (!is.null(values$edit$instructor_id)) {
-            values$edit$instructor_id
-          } else if (!is.null(values$instructor_id)) {
+          selected = if (!is.null(values$instructor_id)) {
             values$instructor_id
+          } else if (!is.null(values$edit$instructor_id)) {
+            values$edit$instructor_id
           } else {
             1L
           }
@@ -849,6 +912,7 @@ module_schedule_server <- function(id, data, get_access_level) {
     # add class =========
     observeEvent(input$add_class, {
       req(can_edit())
+      req(check_edit_or_warn("add_class"))
       data$schedule$start_add()
       # modal dialog
       dlg <- modalDialog(
@@ -989,6 +1053,7 @@ module_schedule_server <- function(id, data, get_access_level) {
     # edit class ====
     observeEvent(input$edit_class, {
       req(can_edit())
+      req(check_edit_or_warn("edit_class"))
       showModal(
         modalDialog(
           title = "Edit scheduled class",
@@ -1003,6 +1068,7 @@ module_schedule_server <- function(id, data, get_access_level) {
     # delete class ====
     observeEvent(input$delete_class, {
       req(can_edit())
+      req(check_edit_or_warn("delete_class"))
       showModal(
         modalDialog(
           title = "Unschedule class",
@@ -1028,6 +1094,7 @@ module_schedule_server <- function(id, data, get_access_level) {
 
     observeEvent(input$delete_class_confirm, {
       req(can_edit())
+      req(is.null(check_edit("delete_class")))
       # pull out record
       record <- get_schedule() |>
         dplyr::filter(
@@ -1092,11 +1159,13 @@ module_schedule_sidebar <- function(id) {
 }
 
 # main UI
-module_schedule_ui <- function(id) {
+# @param access_level the access level the app starts with (see access_levels())
+module_schedule_ui <- function(id, access_level = "faculty") {
   ns <- NS(id)
   btn_class <- paste(header_button_class(), "w-100 text-start text-nowrap")
   bslib::card(
     id = ns("schedule_box"),
+    class = if (access_level == "student") "no-actions",
     full_screen = TRUE,
     bslib::card_header(
       h2(
@@ -1107,9 +1176,17 @@ module_schedule_ui <- function(id) {
     ),
     bslib::layout_sidebar(
       sidebar = bslib::sidebar(
+        id = ns("actions_sidebar"),
         position = "right",
         width = 200,
         gap = "0.5rem",
+        open = if (access_level == "student") "closed" else "desktop",
+        # instructor selection (faculty only)
+        div(
+          id = ns("instructor_select"),
+          style = if (access_level != "faculty") "display: none;",
+          uiOutput(ns("instructor_select_ui"))
+        ),
         # add class
         actionButton(
           ns("add_class"),
@@ -1126,7 +1203,6 @@ module_schedule_ui <- function(id) {
           icon = icon("pen-to-square"),
           class = btn_class
         ) |>
-          shinyjs::disabled() |>
           shinyjs::hidden() |>
           add_tooltip("Editing the schedule is not yet implemented."),
         # delete class
@@ -1136,7 +1212,6 @@ module_schedule_ui <- function(id) {
           icon = icon("xmark"),
           class = btn_class
         ) |>
-          shinyjs::disabled() |>
           shinyjs::hidden() |>
           add_tooltip("Delete ALL sections of this class."),
         # add absence
@@ -1157,7 +1232,6 @@ module_schedule_ui <- function(id) {
           icon = icon("plane-slash"),
           class = btn_class
         ) |>
-          shinyjs::disabled() |>
           shinyjs::hidden() |>
           add_tooltip("Delete a teaching absence."),
         # download table
@@ -1173,22 +1247,7 @@ module_schedule_ui <- function(id) {
     ),
     bslib::card_footer(
       "Use the search bar in the upper right to filter the schedule (e.g. by course number or course name). ",
-      "Use the scrollbar to scroll through all results. ",
-      tags$span(
-        id = ns("footer_edit_info"),
-        "Modifications are only possible once a specific instructor is selected in the left menu bar, and only for future semesters (highlighted in ",
-        tags$span(style = "background-color: yellow;", "yellow"),
-        ") and classes that have not yet been confirmed by the UPA (shown in ",
-        HTML("<i><u>underlined italics</u></i>"),
-        "). ",
-        "To modify anything else, please contact our UPA at ",
-        tags$a(
-          href = "mailto:geoupa@colorado.edu",
-          target = "_new",
-          "geoupa@colorado.edu"
-        ),
-        "."
-      )
+      "Use the scrollbar to scroll through all results."
     )
   )
 }

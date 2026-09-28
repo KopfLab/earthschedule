@@ -16,7 +16,12 @@ use_app_utils <- function() {
     tags$style(HTML(paste(format(cli::ansi_html_style()), collapse = "\n"))) |>
       singleton(),
     # keep navbar inputs/links compact
-    tags$style(HTML(".navbar .form-group {margin-bottom: 0;}")) |> singleton()
+    tags$style(HTML(".navbar .form-group {margin-bottom: 0;}")) |> singleton(),
+    # no sidebar toggle for cards whose actions sidebar is not available
+    tags$style(HTML(
+      ".no-actions .bslib-sidebar-layout > .collapse-toggle {visibility: hidden;}"
+    )) |>
+      singleton()
   )
 }
 
