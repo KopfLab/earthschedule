@@ -297,6 +297,10 @@ module_schedule_server <- function(id, data, get_access_level) {
         include_enrollment = "Enrollment" %in% input$show_options,
         instructor_schedule = values$instructor_id
       ) |>
+        filter_schedule_by_class_level(
+          include_undergrad = "Undergraduate Classes" %in% input$show_options,
+          include_grad = "Graduate Classes" %in% input$show_options
+        ) |>
         prepare_schedule_table_columns()
     })
 
@@ -342,6 +346,8 @@ module_schedule_server <- function(id, data, get_access_level) {
           ns("show_options"),
           "Select information to display:",
           choices = c(
+            "Undergraduate Classes",
+            "Graduate Classes",
             "Summers",
             "Canceled",
             "Section #",
@@ -349,7 +355,13 @@ module_schedule_server <- function(id, data, get_access_level) {
             "Location",
             "Enrollment"
           ),
-          selected = c("Day/Time", "Location", "Enrollment")
+          selected = c(
+            "Undergraduate Classes",
+            "Graduate Classes",
+            "Day/Time",
+            "Location",
+            "Enrollment"
+          )
         )
       )
     })
@@ -578,21 +590,19 @@ module_schedule_server <- function(id, data, get_access_level) {
       log_debug(ns = ns, action, " not possible: ", msg)
       showModal(
         modalDialog(
-          title = "Cannot modify the schedule",
+          title = msg,
           easyClose = TRUE,
-          h5(msg),
           p(
             "Modifications are only possible for future semesters (highlighted in ",
             tags$span(style = "background-color: yellow;", "yellow"),
             ") and classes that have not yet been confirmed by the UPA (shown in ",
             HTML("<i><u>underlined italics</u></i>"),
-            "). To modify anything else, please contact our UPA at ",
+            "). To modify anything else, please contact our wonderful UPA at ",
             tags$a(
-              href = "mailto:geoupa@colorado.edu",
+              href = "mailto:earthsciug@colorado.edu",
               target = "_new",
-              "geoupa@colorado.edu"
-            ),
-            "."
+              "earthsciug@colorado.edu"
+            )
           ),
           footer = modalButton("OK")
         )
@@ -1071,7 +1081,7 @@ module_schedule_server <- function(id, data, get_access_level) {
       req(check_edit_or_warn("delete_class"))
       showModal(
         modalDialog(
-          title = "Unschedule class",
+          title = "Delete class",
           h5(
             sprintf(
               "Are you sure you want to remove all sections of %s from the teaching schedule of %s for %s?",
@@ -1169,7 +1179,6 @@ module_schedule_ui <- function(id, access_level = "faculty") {
     full_screen = TRUE,
     bslib::card_header(
       h2(
-        class = "fw-bold fs-6 my-1",
         "Schedule",
         textOutput(ns("instructor_name"), inline = TRUE)
       )
@@ -1187,6 +1196,14 @@ module_schedule_ui <- function(id, access_level = "faculty") {
           style = if (access_level != "faculty") "display: none;",
           uiOutput(ns("instructor_select_ui"))
         ),
+        # download table
+        downloadButton(
+          ns("download_table"),
+          "Download Table",
+          icon = icon("download"),
+          class = btn_class
+        ) |>
+          add_tooltip("Download table as CSV file"),
         # add class
         actionButton(
           ns("add_class"),
@@ -1199,16 +1216,16 @@ module_schedule_ui <- function(id, access_level = "faculty") {
         # edit class
         actionButton(
           ns("edit_class"),
-          "Edit Schedule",
+          "Edit Class",
           icon = icon("pen-to-square"),
           class = btn_class
         ) |>
           shinyjs::hidden() |>
-          add_tooltip("Editing the schedule is not yet implemented."),
+          add_tooltip("Editing a class is not yet implemented."),
         # delete class
         actionButton(
           ns("delete_class"),
-          "Unschedule",
+          "Delete Class",
           icon = icon("xmark"),
           class = btn_class
         ) |>
@@ -1233,15 +1250,7 @@ module_schedule_ui <- function(id, access_level = "faculty") {
           class = btn_class
         ) |>
           shinyjs::hidden() |>
-          add_tooltip("Delete a teaching absence."),
-        # download table
-        downloadButton(
-          ns("download_table"),
-          "Download",
-          icon = icon("download"),
-          class = btn_class
-        ) |>
-          add_tooltip("Download table as CSV file")
+          add_tooltip("Delete a teaching absence.")
       ),
       module_selector_table_ui(ns("schedule"))
     ),

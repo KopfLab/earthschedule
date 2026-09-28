@@ -447,6 +447,31 @@ combine_schedule <- function(
 }
 
 
+# filter the combined schedule by class level, a class is undergraduate if its
+# number is < 5000 and graduate if it is >= 5000, cross-listed classes (e.g.
+# ERTH4700/5700) are kept if any of their numbers is included, classes without
+# a recognizable 4-digit number are always kept
+# @param schedule_combined the combined schedule (see combine_schedule())
+# @param include_undergrad whether to include undergraduate classes
+# @param include_grad whether to include graduate classes
+filter_schedule_by_class_level <- function(
+  schedule_combined,
+  include_undergrad = TRUE,
+  include_grad = TRUE
+) {
+  numbers <- stringr::str_extract_all(
+    as.character(schedule_combined$class),
+    "\\d{4}"
+  )
+  keep <- purrr::map_lgl(numbers, function(nrs) {
+    nrs <- as.integer(nrs)
+    length(nrs) == 0L ||
+      (include_undergrad && any(nrs < 5000L)) ||
+      (include_grad && any(nrs >= 5000L))
+  })
+  schedule_combined[keep, , drop = FALSE]
+}
+
 # select the schedule table columns in the right order (the term columns are
 # dynamic) and escape html characters for safety, then create \n as <br> and
 # re-enable the italics/underline formatting tags

@@ -193,3 +193,25 @@ test_that("schedule is combined into a table", {
   expect_equal(table[["Fall 2030"]][1], "MWF 9:00a-9:50a<br>TTH 11:00a-12:15p")
   expect_equal(table[["Spring 2031"]][3], "<i><u>yes</u></i>")
 })
+
+test_that("filter_schedule_by_class_level() works", {
+  df <- dplyr::tibble(
+    class = factor(c("ERTH1010", "ERTH5100", "ERTH4700/5700", "ERTHnew"))
+  )
+  filtered_classes <- function(...) {
+    as.character(filter_schedule_by_class_level(df, ...)$class)
+  }
+  expect_equal(filtered_classes(), as.character(df$class))
+  expect_equal(
+    filtered_classes(include_grad = FALSE),
+    c("ERTH1010", "ERTH4700/5700", "ERTHnew")
+  )
+  expect_equal(
+    filtered_classes(include_undergrad = FALSE),
+    c("ERTH5100", "ERTH4700/5700", "ERTHnew")
+  )
+  expect_equal(
+    filtered_classes(include_undergrad = FALSE, include_grad = FALSE),
+    "ERTHnew"
+  )
+})
