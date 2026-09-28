@@ -11,6 +11,13 @@ module_schedule_server <- function(id, data, get_access_level) {
 
     # reactive values
     values <- reactiveValues(
+      show_options = c(
+        "Undergraduate Classes",
+        "Graduate Classes",
+        "Day/Time",
+        "Location",
+        "Enrollment"
+      ),
       first_term = NULL,
       last_term = NULL,
       instructor_id = NULL,
@@ -48,6 +55,16 @@ module_schedule_server <- function(id, data, get_access_level) {
         values$last_term <- input$last_term
       }
     })
+
+    # monitor information to display (NULL if nothing is selected)
+    observeEvent(
+      input$show_options,
+      {
+        values$show_options <- input$show_options
+      },
+      ignoreNULL = FALSE,
+      ignoreInit = TRUE
+    )
 
     # monitor instructor
     observeEvent(input$instructor_id, {
@@ -389,13 +406,8 @@ module_schedule_server <- function(id, data, get_access_level) {
             "Location",
             "Enrollment"
           ),
-          selected = c(
-            "Undergraduate Classes",
-            "Graduate Classes",
-            "Day/Time",
-            "Location",
-            "Enrollment"
-          )
+          # keep the selection when the sidebar is regenerated (e.g. on reload)
+          selected = isolate(values$show_options)
         ),
         # show the entire cohort (only for faculty with a selected instructor)
         div(
