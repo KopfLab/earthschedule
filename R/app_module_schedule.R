@@ -15,7 +15,8 @@ module_schedule_server <- function(id, data, get_access_level) {
       last_term = NULL,
       instructor_id = NULL,
       instructor = NULL,
-      edit = list()
+      edit = list(),
+      class_edit_idx = NULL
     )
 
     # data functions ===========
@@ -119,6 +120,7 @@ module_schedule_server <- function(id, data, get_access_level) {
         values$instructor <- NULL
         updateSelectizeInput(session, "instructor_id", selected = "NA")
       }
+      shinyjs::toggle("toggle_lock", condition = get_access_level() == "admin")
       bslib::toggle_sidebar("actions_sidebar", open = !is_student)
       shinyjs::toggleClass(
         "schedule_box",
@@ -527,9 +529,17 @@ module_schedule_server <- function(id, data, get_access_level) {
       }
     })
 
+    # the class buttons only make sense once a (non-empty) cell is selected
+    observe({
+      has_selection <- length(values$edit) > 0 &&
+        !identical(values$edit$info, "no")
+      c("edit_class", "delete_class", "toggle_lock") |>
+        purrr::walk(~ shinyjs::toggleState(.x, condition = has_selection))
+    })
+
     # check whether an action is possible for the selected cell, returns NULL
     # if it is, otherwise the reason why not
-    # @param action one of add_class, edit_class, delete_class, add_leave, delete_leave
+    # @param action one of add_class, edit_class, delete_class, toggle_lock, add_leave, delete_leave
     check_edit <- function(action) {
       edit <- values$edit
       has_cell <- length(edit) > 0
@@ -558,13 +568,22 @@ module_schedule_server <- function(id, data, get_access_level) {
           ))
         } else if (!is_future) {
           return(sprintf("Cannot %s a class that's in the past.", verb))
-        } else if (is_confirmed) {
+        } else if (
+          is_confirmed &&
+            !(action == "edit_class" && get_access_level() == "admin")
+        ) {
           return(sprintf(
             "Cannot %s a class already confirmed by the UPA.",
             verb
           ))
         } else if (!is_own) {
           return(sprintf("You can only %s your own classes.", verb))
+        }
+      } else if (action == "toggle_lock") {
+        if (!is_class || nrow(get_selected_class_records()) == 0L) {
+          return(
+            "Please first select the class you want to lock or unlock in the table."
+          )
         }
       } else if (action == "delete_leave") {
         if (!is_leave) {
@@ -790,9 +809,70 @@ module_schedule_server <- function(id, data, get_access_level) {
       )
     })
 
-    # add class dialog =========
-    add_class_dialog_inputs <- reactive({
+    # class dialog =========
+
+    # prefill values for the class dialog when adding a class (based on the
+    # selected cell)
+    get_class_add_prefill <- function() {
+      list(
+        instructor_id = if (!is.null(values$instructor_id)) {
+          values$instructor_id
+        } else {
+          values$edit$instructor_id
+        },
+        term = values$edit$term,
+        class = values$edit$class
+      )
+    }
+
+    # prefill values for the class dialog when editing a class (based on the
+    # schedule record in row idx of the spreadsheet)
+    get_class_edit_prefill <- function(idx) {
+      record <- data$schedule$get_data()[idx, ]
+      instructor_ids <- stringr::str_split(record$instructor_id, ",")[[1]] |>
+        stringr::str_remove_all("[ \\r\\n]")
+      instructor_ids <- instructor_ids[nchar(instructor_ids) > 0]
+      main_instructor <- values$edit$instructor_id
+      value_or_null <- function(x) if (is.na(x)) NULL else as.character(x)
+      list(
+        instructor_id = main_instructor,
+        instructor_id2 = setdiff(instructor_ids, main_instructor),
+        term = record$term,
+        class = stringr::str_remove_all(record$class, "[ \\r\\n]"),
+        subtitle = value_or_null(record$subtitle),
+        section = value_or_null(record$section),
+        max_students = value_or_null(record$enrollment_cap),
+        room_id = if (!is.na(record$building) && !is.na(record$room)) {
+          paste(
+            record$building,
+            stringr::str_remove(record$room, "\\.\\d+$")
+          )
+        },
+        timeslot = if (
+          !is.na(record$days) &&
+            !is.na(record$start_time) &&
+            !is.na(record$end_time)
+        ) {
+          sprintf(
+            "%s: %s-%s",
+            stringr::str_to_upper(record$days),
+            record$start_time,
+            record$end_time
+          )
+        },
+        notes = value_or_null(record$notes)
+      )
+    }
+
+    # class dialog inputs
+    # @param prefill list of values to prefill (see get_class_add_prefill())
+    class_dialog_inputs <- function(prefill = list()) {
       log_debug(ns = ns, "generating class dialog inputs")
+
+      # make sure the prefilled values are available as choices
+      with_value <- function(choices, value) {
+        c(choices, setdiff(value, choices))
+      }
 
       # instructor selectize
       instructor_input <-
@@ -800,11 +880,13 @@ module_schedule_server <- function(id, data, get_access_level) {
           ns("class_instructor_id"),
           "Instructor",
           multiple = FALSE,
-          choices = c("Select instructor" = "", get_active_ERTH_instructors()),
-          selected = if (!is.null(values$instructor_id)) {
-            values$instructor_id
-          } else if (!is.null(values$edit$instructor_id)) {
-            values$edit$instructor_id
+          choices = c(
+            "Select instructor" = "",
+            get_active_ERTH_instructors()
+          ) |>
+            with_value(prefill$instructor_id),
+          selected = if (!is.null(prefill$instructor_id)) {
+            prefill$instructor_id
           } else {
             1L
           }
@@ -816,9 +898,6 @@ module_schedule_server <- function(id, data, get_access_level) {
 
       # first block
       tagList(
-        h5(
-          "Please add your planned classes. You do NOT need to add recitations or labs linked to your classes as those will be carried over by the UPA."
-        ),
         bslib::layout_columns(
           col_widths = c(6, 6),
           div(
@@ -831,11 +910,7 @@ module_schedule_server <- function(id, data, get_access_level) {
                 "Select term" = "",
                 get_sorted_terms(get_future_terms())
               ),
-              selected = if (!is.null(values$edit$term)) {
-                values$edit$term
-              } else {
-                1L
-              }
+              selected = if (!is.null(prefill$term)) prefill$term else 1L
             )
           ),
           div(
@@ -846,22 +921,21 @@ module_schedule_server <- function(id, data, get_access_level) {
               choices = c(
                 "Class is not co-taught" = "",
                 get_active_ERTH_instructors()
-              )
+              ) |>
+                with_value(prefill$instructor_id2),
+              selected = prefill$instructor_id2
             ),
             selectizeInput(
               ns("class_id"),
               "Class",
               multiple = FALSE,
               choices = c("Select class" = "", levels(get_classes()$class)),
-              selected = if (!is.null(values$edit$class)) {
-                values$edit$class
-              } else {
-                1L
-              }
+              selected = if (!is.null(prefill$class)) prefill$class else 1L
             ),
             textInput(
               ns("subtitle"),
               "Special Topics Title",
+              value = if (!is.null(prefill$subtitle)) prefill$subtitle else "",
               placeholder = "Enter a title for the special topics class"
             ) |>
               shinyjs::hidden()
@@ -881,11 +955,17 @@ module_schedule_server <- function(id, data, get_access_level) {
             textInput(
               ns("section"),
               "Does this section have a specific number?",
+              value = if (!is.null(prefill$section)) prefill$section else "",
               placeholder = "No specific number"
             ),
             textInput(
               ns("max_students"),
               "Do you want to limit enrollment?",
+              value = if (!is.null(prefill$max_students)) {
+                prefill$max_students
+              } else {
+                ""
+              },
               placeholder = "Use classroom limit"
             )
           ),
@@ -894,24 +974,63 @@ module_schedule_server <- function(id, data, get_access_level) {
               ns("room_id"),
               "Do you have a preferred classroom?",
               multiple = FALSE,
-              choices = c("No preference" = "", get_rooms())
+              choices = c("No preference" = "", get_rooms()) |>
+                with_value(prefill$room_id),
+              selected = prefill$room_id
             ),
             selectizeInput(
               ns("timeslot"),
               "Do you have a preferred timeslot?",
               multiple = FALSE,
-              choices = c("No preference" = "", get_teaching_times())
+              choices = c("No preference" = "", get_teaching_times()) |>
+                with_value(prefill$timeslot),
+              selected = prefill$timeslot
             )
           )
         ),
         textAreaInput(
           ns("notes"),
           "Notes",
+          value = if (!is.null(prefill$notes)) prefill$notes else "",
           width = "100%",
           placeholder = "Enter any notes for the UPA"
         )
       )
-    })
+    }
+
+    # the values entered in the class dialog (NA for empty fields)
+    get_class_dialog_values <- function() {
+      is_special_topics <- stringr::str_detect(input$class_id, "new|4700|5700")
+      value_or_na <- function(x) if (nchar(x) > 0) x else NA_character_
+      list(
+        term = input$class_term,
+        instructor_id = c(
+          if (!is.null(values$instructor_id)) {
+            values$instructor_id
+          } else {
+            input$class_instructor_id
+          },
+          input$class_instructor_id2
+        ) |>
+          paste(collapse = ", "),
+        class = input$class_id,
+        subtitle = if (is_special_topics) {
+          value_or_na(input$subtitle)
+        } else {
+          NA_character_
+        },
+        section = value_or_na(input$section),
+        enrollment_cap = stringr::str_extract(input$max_students, "\\d+") |>
+          as.integer(),
+        building = stringr::str_extract(input$room_id, "^[^ ]+"),
+        room = stringr::str_extract(input$room_id, "(?<= ).+"),
+        days = stringr::str_extract(input$timeslot, "^[^:]+"),
+        start_time = stringr::str_extract(input$timeslot, "(?<=: )[^-]+"),
+        end_time = stringr::str_extract(input$timeslot, "(?<=-).+"),
+        notes = value_or_na(input$notes)
+      )
+    }
+
     observeEvent(input$class_id, {
       shinyjs::toggle(
         "subtitle",
@@ -924,11 +1043,15 @@ module_schedule_server <- function(id, data, get_access_level) {
       req(can_edit())
       req(check_edit_or_warn("add_class"))
       data$schedule$start_add()
+      values$class_edit_idx <- NULL
       # modal dialog
       dlg <- modalDialog(
         size = "l",
         title = "Schedule Class",
-        add_class_dialog_inputs(),
+        h5(
+          "Please add your planned classes. You do NOT need to add recitations or labs linked to your classes as those will be carried over by the UPA."
+        ),
+        class_dialog_inputs(get_class_add_prefill()),
         footer = tagList(
           actionButton(ns("save_class"), "Add", class = "btn-primary"),
           modalButton("Cancel")
@@ -949,7 +1072,10 @@ module_schedule_server <- function(id, data, get_access_level) {
     })
 
     observeEvent(toggle_save_class_add(), {
-      req(isolate(input$add_class))
+      req(
+        isTRUE(isolate(input$add_class) > 0) ||
+          isTRUE(isolate(input$edit_class) > 0)
+      )
       shinyjs::toggleState("save_class", condition = toggle_save_class_add())
     })
 
@@ -968,83 +1094,39 @@ module_schedule_server <- function(id, data, get_access_level) {
         "max_students",
         "room_id",
         "timeslot",
-        "notes"
+        "notes",
+        "edit_record"
       ) |>
         purrr::walk(shinyjs::disable)
 
       # try to save
       tryCatch(
         {
-          # info
-          log_info(
-            "adding class to schedule",
-            user_msg = "Adding class to schedule..."
-          )
-
-          # values
-          data_values <- list(
-            term = input$class_term,
-            instructor_id = if (!is.null(values$instructor_id)) {
-              values$instructor_id
-            } else {
-              input$class_instructor_id
-            },
-            class = input$class_id,
-            created = get_datetime(),
-            confirmed = FALSE,
-            notes = input$notes
-          )
-
-          # optional details
-          if (!is.null(input$class_instructor_id2)) {
-            data_values$instructor_id <- c(
-              data_values$instructor_id,
-              input$class_instructor_id2
-            ) |>
-              paste(collapse = ", ")
-          }
-
-          if (
-            stringr::str_detect(input$class_id, "new|4700|5700") &&
-              nchar(input$subtitle) > 0
-          ) {
-            data_values$subtitle <- input$subtitle
-          }
-
-          if (nchar(input$section) > 0) {
-            data_values$section <- input$section
-          }
-
-          if (nchar(input$max_students) > 0) {
-            data_values$enrollment_cap <- stringr::str_extract(
-              input$max_students,
-              "\\d+"
-            ) |>
-              as.integer()
-          }
-
-          if (nchar(input$room_id) > 0) {
-            data_values$building <- stringr::str_extract(
-              input$room_id,
-              "^[^ ]+"
+          class_values <- get_class_dialog_values()
+          if (is.null(values$class_edit_idx)) {
+            # add (only the fields that have values)
+            log_info(
+              "adding class to schedule",
+              user_msg = "Adding class to schedule..."
             )
-            data_values$room <- stringr::str_extract(input$room_id, "(?<= ).+")
-          }
-
-          if (nchar(input$timeslot) > 0) {
-            data_values$days <- stringr::str_extract(input$timeslot, "^[^:]+")
-            data_values$start_time <- stringr::str_extract(
-              input$timeslot,
-              "(?<=: )[^-]+"
+            data$schedule$start_add()
+            data$schedule$update(
+              .list = c(
+                class_values[!purrr::map_lgl(class_values, is.na)],
+                list(created = get_datetime(), confirmed = FALSE)
+              )
             )
-            data_values$end_time <- stringr::str_extract(
-              input$timeslot,
-              "(?<=-).+"
+          } else {
+            # edit (all fields to also clear removed values)
+            log_info(
+              "updating class in schedule",
+              user_msg = "Updating class in schedule..."
+            )
+            data$schedule$start_edit(idx = values$class_edit_idx)
+            data$schedule$update(
+              .list = c(class_values, list(updated = get_datetime()))
             )
           }
-
-          # update data
-          data$schedule$update(.list = data_values)
 
           # commit
           if (data$schedule$commit()) removeModal()
@@ -1061,18 +1143,62 @@ module_schedule_server <- function(id, data, get_access_level) {
     })
 
     # edit class ====
+
+    # show the edit dialog for the schedule record in row idx of the spreadsheet
+    show_edit_class_dialog <- function(idx) {
+      values$class_edit_idx <- idx
+      records <- get_selected_class_records() |>
+        dplyr::distinct(.data$idx, .keep_all = TRUE)
+
+      # if there are multiple sections, pick which one to edit
+      record_input <- if (nrow(records) > 1L) {
+        selectizeInput(
+          ns("edit_record"),
+          "Section to edit",
+          width = "100%",
+          choices = stats::setNames(
+            records$idx,
+            sprintf(
+              "#%s: %s %s-%s in %s %s",
+              ifelse(is.na(records$section), "?", records$section),
+              ifelse(is.na(records$days), "?", records$days),
+              ifelse(is.na(records$start_time), "?", records$start_time),
+              ifelse(is.na(records$end_time), "?", records$end_time),
+              ifelse(is.na(records$building), "?", records$building),
+              ifelse(is.na(records$room), "?", records$room)
+            )
+          ),
+          selected = idx
+        )
+      }
+
+      showModal(
+        modalDialog(
+          size = "l",
+          title = "Edit Class",
+          record_input,
+          class_dialog_inputs(get_class_edit_prefill(idx)),
+          footer = tagList(
+            actionButton(ns("save_class"), "Save", class = "btn-primary"),
+            modalButton("Cancel")
+          )
+        )
+      )
+      shinyjs::toggleState("save_class", condition = toggle_save_class_add())
+    }
+
     observeEvent(input$edit_class, {
       req(can_edit())
       req(check_edit_or_warn("edit_class"))
-      showModal(
-        modalDialog(
-          title = "Edit scheduled class",
-          h5(
-            "Sorry, this functionality is not yet implemented. If you really need to change this class, please delete the existing record and add it anew."
-          ),
-          footer = tagList(modalButton("Cancel"))
-        )
-      )
+      show_edit_class_dialog(min(get_selected_class_records()$idx))
+    })
+
+    # switch to a different section
+    observeEvent(input$edit_record, {
+      idx <- as.integer(input$edit_record)
+      req(!is.na(idx), !identical(idx, values$class_edit_idx))
+      req(idx %in% get_selected_class_records()$idx)
+      show_edit_class_dialog(idx)
     })
 
     # delete class ====
@@ -1081,11 +1207,19 @@ module_schedule_server <- function(id, data, get_access_level) {
       req(check_edit_or_warn("delete_class"))
       showModal(
         modalDialog(
-          title = "Delete class",
+          title = "Delete Class",
           h5(
             sprintf(
-              "Are you sure you want to remove all sections of %s from the teaching schedule of %s for %s?",
-              values$edit$class,
+              "Are you sure you want to delete (unschedule) %s from the teaching schedule of %s for %s?",
+              if (length(unique(get_selected_class_records()$idx)) > 1L) {
+                sprintf(
+                  "all %d sections of %s",
+                  length(unique(get_selected_class_records()$idx)),
+                  values$edit$class
+                )
+              } else {
+                values$edit$class
+              },
               values$edit$instructor,
               values$edit$term
             )
@@ -1093,7 +1227,7 @@ module_schedule_server <- function(id, data, get_access_level) {
           footer = tagList(
             actionButton(
               ns("delete_class_confirm"),
-              "Delete",
+              "Delete Class",
               class = "btn-danger"
             ),
             modalButton("Cancel")
@@ -1137,6 +1271,79 @@ module_schedule_server <- function(id, data, get_access_level) {
 
           # commit
           if (data$schedule$commit()) removeModal()
+        },
+        error = function(e) {
+          log_error(
+            ns = ns,
+            "failed",
+            user_msg = "Data saving error",
+            error = e
+          )
+        }
+      )
+    })
+
+    # lock/unlock class ====
+
+    # schedule records (all sections) of the selected class
+    get_selected_class_records <- reactive({
+      if (length(values$edit) == 0L) {
+        return(get_schedule()[0, ])
+      }
+      get_schedule() |>
+        dplyr::filter(
+          .data$class == !!values$edit$class,
+          .data$instructor_id == !!values$edit$instructor_id,
+          .data$term == !!values$edit$term
+        )
+    })
+
+    # whether the selected class is locked (confirmed by the UPA)
+    is_selected_class_locked <- reactive({
+      records <- get_selected_class_records()
+      nrow(records) > 0L && all(records$confirmed)
+    })
+
+    # show lock or unlock depending on the selected class
+    observeEvent(is_selected_class_locked(), {
+      if (is_selected_class_locked()) {
+        updateActionButton(
+          session,
+          "toggle_lock",
+          label = "Unlock Class",
+          icon = icon("lock-open")
+        )
+      } else {
+        updateActionButton(
+          session,
+          "toggle_lock",
+          label = "Lock Class",
+          icon = icon("lock")
+        )
+      }
+    })
+
+    observeEvent(input$toggle_lock, {
+      req(get_access_level() == "admin")
+      req(check_edit_or_warn("toggle_lock"))
+      records <- get_selected_class_records()
+      lock <- !is_selected_class_locked()
+
+      tryCatch(
+        {
+          log_info(
+            if (lock) "locking" else "unlocking",
+            " schedule record(s)",
+            user_msg = sprintf(
+              "%s %d section%s...",
+              if (lock) "Locking" else "Unlocking",
+              length(unique(records$idx)),
+              if (length(unique(records$idx)) > 1) "s" else ""
+            )
+          )
+          data$schedule$start_edit(idx = unique(records$idx))
+          data$schedule$update(confirmed = lock, updated = get_datetime())
+          data$schedule$commit()
         },
         error = function(e) {
           log_error(
@@ -1220,8 +1427,9 @@ module_schedule_ui <- function(id, access_level = "faculty") {
           icon = icon("pen-to-square"),
           class = btn_class
         ) |>
+          shinyjs::disabled() |>
           shinyjs::hidden() |>
-          add_tooltip("Editing a class is not yet implemented."),
+          add_tooltip("Edit a section of this class."),
         # delete class
         actionButton(
           ns("delete_class"),
@@ -1229,6 +1437,7 @@ module_schedule_ui <- function(id, access_level = "faculty") {
           icon = icon("xmark"),
           class = btn_class
         ) |>
+          shinyjs::disabled() |>
           shinyjs::hidden() |>
           add_tooltip("Delete ALL sections of this class."),
         # add absence
@@ -1250,7 +1459,19 @@ module_schedule_ui <- function(id, access_level = "faculty") {
           class = btn_class
         ) |>
           shinyjs::hidden() |>
-          add_tooltip("Delete a teaching absence.")
+          add_tooltip("Delete a teaching absence."),
+        # lock/unlock class (admin only)
+        actionButton(
+          ns("toggle_lock"),
+          "Lock Class",
+          icon = icon("lock"),
+          class = btn_class
+        ) |>
+          shinyjs::disabled() |>
+          shinyjs::hidden() |>
+          add_tooltip(
+            "Lock (confirm) or unlock ALL sections of this class. Locked classes can no longer be edited or deleted by faculty."
+          )
       ),
       module_selector_table_ui(ns("schedule"))
     ),
