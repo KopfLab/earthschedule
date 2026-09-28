@@ -1,0 +1,29 @@
+# R session files
+.RData
+.Rproj.user
+.Rprofile
+.Rhistory
+.Rapp.history
+
+# OS generated files
+.DS_Store
+.DS_Store?
+~$*
+.Spotlight*
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Package development output files
+*.tar.gz
+*.Rcheck
+
+# credentials and data (NEVER commit these)
+.httr-oauth
+*.json
+credentials.R
+*.xlsx
+*.csv
+
+# ruby (dev autoreload)
+Gemfile.lock
