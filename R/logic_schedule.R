@@ -360,21 +360,25 @@ combine_schedule <- function(
     ) |>
     # remove the future classes placeholder
     dplyr::filter(.data$class != "XXXX9999") |>
-    # for each instructor fill in past and future values
+    # for each instructor fill in past and future values (future summers are
+    # "no" instead of "?" as most instructors don't teach in the summer)
     dplyr::mutate(
       dplyr::across(
-        dplyr::any_of(selected_terms[is_term_before(
-          selected_terms,
-          before = current_term,
-          include_equal = TRUE
-        )]),
+        dplyr::any_of(selected_terms[
+          is_term_before(
+            selected_terms,
+            before = current_term,
+            include_equal = TRUE
+          ) |
+            get_term_season(selected_terms) == "Summer"
+        ]),
         ~ fill_empty(.x)
       ),
       dplyr::across(
-        dplyr::any_of(selected_terms[is_term_after(
-          selected_terms,
-          after = current_term
-        )]),
+        dplyr::any_of(selected_terms[
+          is_term_after(selected_terms, after = current_term) &
+            get_term_season(selected_terms) != "Summer"
+        ]),
         ~ fill_empty(.x, allow_question_mark = TRUE)
       ),
       .by = instructor_id

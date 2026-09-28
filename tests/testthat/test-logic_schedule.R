@@ -254,3 +254,17 @@ test_that("filter_schedule_by_class_level() works", {
     "ERTHnew"
   )
 })
+
+test_that("future summers without classes are 'no' instead of '?'", {
+  terms <- c("Fall 2030", "Spring 2031", "Summer 2031", "Fall 2031")
+  combined <- combine_schedule(
+    schedule = prepare_schedule(test_schedule()),
+    not_teaching = prepare_not_teaching(test_not_teaching()),
+    instructors = prepare_instructors(test_instructors()),
+    classes = prepare_classes(test_classes()),
+    selected_terms = terms,
+    recognized_reasons = test_not_teaching()$reason
+  )
+  expect_equal(combined[["Summer 2031"]], c("no", "no", "no"))
+  expect_equal(combined[["Fall 2031"]], c("?", "?", "?"))
+})
