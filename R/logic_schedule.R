@@ -475,16 +475,38 @@ filter_schedule_by_class_level <- function(
 # select the schedule table columns in the right order (the term columns are
 # dynamic) and escape html characters for safety, then create \n as <br> and
 # re-enable the italics/underline formatting tags
-prepare_schedule_table_columns <- function(schedule_combined) {
+# the 4th column is the one to group by (full_title when grouping by class,
+# Instructor when grouping by instructor) and the 5th the row label
+# @param group_by whether to group by "class" or by "instructor" (sorted
+# alphabetically by instructor and then by class)
+prepare_schedule_table_columns <- function(
+  schedule_combined,
+  group_by = c("class", "instructor")
+) {
+  group_by <- arg_match(group_by)
+  if (group_by == "class") {
+    schedule_combined <- schedule_combined |>
+      dplyr::select(
+        "row",
+        "instructor_id",
+        "class",
+        "full_title",
+        Instructor = "instructor",
+        dplyr::matches(get_term_regexp())
+      )
+  } else {
+    schedule_combined <- schedule_combined |>
+      dplyr::arrange(.data$instructor, .data$full_title) |>
+      dplyr::select(
+        "row",
+        "instructor_id",
+        "class",
+        Instructor = "instructor",
+        Class = "full_title",
+        dplyr::matches(get_term_regexp())
+      )
+  }
   schedule_combined |>
-    dplyr::select(
-      "row",
-      "instructor_id",
-      "class",
-      "full_title",
-      Instructor = "instructor",
-      dplyr::matches(get_term_regexp())
-    ) |>
     dplyr::mutate(dplyr::across(dplyr::where(is.character), function(x) {
       x |>
         htmltools::htmlEscape() |>

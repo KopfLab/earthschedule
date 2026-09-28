@@ -192,6 +192,21 @@ test_that("schedule is combined into a table", {
   expect_equal(table$Instructor[1], "&lt;b&gt;Ann&lt;/b&gt;")
   expect_equal(table[["Fall 2030"]][1], "MWF 9:00a-9:50a<br>TTH 11:00a-12:15p")
   expect_equal(table[["Spring 2031"]][3], "<i><u>yes</u></i>")
+
+  # grouping by instructor sorts by instructor, then class
+  by_instructor <- detailed |>
+    prepare_schedule_table_columns(group_by = "instructor")
+  expect_equal(names(by_instructor)[4:5], c("Instructor", "Class"))
+  expect_equal(
+    as.character(by_instructor$Instructor),
+    sort(as.character(by_instructor$Instructor))
+  )
+  expect_equal(
+    by_instructor$Class,
+    by_instructor |>
+      dplyr::arrange(.data$Instructor, .data$Class) |>
+      dplyr::pull("Class")
+  )
 })
 
 test_that("filter_schedule_by_class_level() works", {

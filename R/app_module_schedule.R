@@ -97,6 +97,15 @@ module_schedule_server <- function(id, data, get_access_level) {
           identical(values$instructor_id, instructor_id))
     }
 
+    # the show entire cohort option is only available for faculty with a
+    # selected instructor
+    show_cohort_option <- reactive({
+      get_access_level() == "faculty" && !is.null(values$instructor_id)
+    })
+    observe({
+      shinyjs::toggle("cohort_select", condition = show_cohort_option())
+    })
+
     # show the edit buttons
     observe({
       c(
@@ -286,7 +295,7 @@ module_schedule_server <- function(id, data, get_access_level) {
       schedule_table$reset_visible_columns()
 
       # combine schedule information
-      combine_schedule(
+      schedule <- combine_schedule(
         schedule = get_schedule(),
         not_teaching = get_not_teaching(),
         instructors = get_instructors(),
@@ -302,8 +311,22 @@ module_schedule_server <- function(id, data, get_access_level) {
         filter_schedule_by_class_level(
           include_undergrad = "Undergraduate Classes" %in% input$show_options,
           include_grad = "Graduate Classes" %in% input$show_options
-        ) |>
-        prepare_schedule_table_columns()
+        )
+
+      # only the selected instructor's records (unless showing the entire cohort)
+      if (!is.null(values$instructor_id) && !isTRUE(input$show_cohort)) {
+        schedule <- schedule |>
+          dplyr::filter(.data$instructor_id == !!values$instructor_id)
+      }
+
+      schedule |>
+        prepare_schedule_table_columns(
+          group_by = if (identical(input$group_by, "instructor")) {
+            "instructor"
+          } else {
+            "class"
+          }
+        )
     })
 
     # generate UI =====================
@@ -344,6 +367,14 @@ module_schedule_server <- function(id, data, get_access_level) {
             }
           })
         ),
+        radioButtons(
+          ns("group_by"),
+          "Group information:",
+          choices = c("By class" = "class", "By instructor" = "instructor"),
+          selected = isolate(
+            if (is.null(input$group_by)) "class" else input$group_by
+          )
+        ),
         checkboxGroupInput(
           ns("show_options"),
           "Select information to display:",
@@ -364,6 +395,25 @@ module_schedule_server <- function(id, data, get_access_level) {
             "Location",
             "Enrollment"
           )
+        ),
+        # show the entire cohort (only for faculty with a selected instructor)
+        div(
+          id = ns("cohort_select"),
+          # pull up to be part of the list of information to display
+          style = paste(
+            "margin-top: -0.75rem;",
+            if (!isolate(show_cohort_option())) "display: none;"
+          ),
+          checkboxInput(
+            ns("show_cohort"),
+            "Show entire cohort",
+            value = isolate(
+              if (is.null(input$show_cohort)) TRUE else input$show_cohort
+            )
+          ) |>
+            add_tooltip(
+              "Show everyone who teaches the selected instructor's classes. If unchecked, only the selected instructor's classes and absences are shown."
+            )
         )
       )
     })
