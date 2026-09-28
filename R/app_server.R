@@ -50,13 +50,42 @@ app_data_sheets <- function() {
 }
 
 # app server
-app_server <- function(data_sheet_id, gs_key_file, dev_cache_file = NULL) {
+# @param access_level the access level the app starts with (see access_levels())
+app_server <- function(
+  data_sheet_id,
+  gs_key_file,
+  access_level = "faculty",
+  dev_cache_file = NULL
+) {
   function(input, output, session) {
     log_info("\n\n========================================================")
     log_info(
       "starting earthschedule GUI",
-      if (shiny::in_devmode()) " in DEV mode"
+      if (shiny::in_devmode()) " in DEV mode",
+      " with access level '",
+      access_level,
+      "'"
     )
+
+    # access level (can only change in dev mode)
+    get_access_level <- reactiveVal(access_level)
+    observeEvent(input$dev_access_level, {
+      req(shiny::in_devmode())
+      req(input$dev_access_level %in% access_levels())
+      if (!identical(input$dev_access_level, get_access_level())) {
+        log_info("switching to access level '", input$dev_access_level, "'")
+        get_access_level(input$dev_access_level)
+      }
+    })
+    output$access_level_title <- renderText({
+      access_level_title(get_access_level())
+    })
+    observeEvent(get_access_level(), ignoreInit = TRUE, {
+      shinyjs::runjs(sprintf(
+        "document.title = document.title.replace(/ \\| \\w+ View$/, '%s');",
+        access_level_title(get_access_level())
+      ))
+    })
 
     # data module
     data <- module_data_server(
@@ -68,7 +97,11 @@ app_server <- function(data_sheet_id, gs_key_file, dev_cache_file = NULL) {
     )
 
     # schedule module
-    module_schedule_server("schedule", data = data)
+    module_schedule_server(
+      "schedule",
+      data = data,
+      get_access_level = get_access_level
+    )
 
     # dev mode
     observeEvent(input$dev_mode_toggle, {

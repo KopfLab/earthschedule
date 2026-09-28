@@ -7,6 +7,7 @@
 earthschedule_app(
   data_sheet_id,
   gs_key_file,
+  access_level = c("faculty", "admin", "student"),
   dev_cache_file = "local_data_schedule.xlsx",
   paths_app_url = "https://apps.kopflab.org/earthpaths",
   options = list()
@@ -17,6 +18,11 @@ earthschedule_app(
 
 \item{gs_key_file}{path to the json key file of the Google service account
 that has access to the spreadsheet}
+
+\item{access_level}{which view of the app to provide: \code{"faculty"} can
+select an instructor and then schedule classes and absences for that
+instructor, \code{"admin"} can schedule classes and absences for any
+instructor, and \code{"student"} can only view (and download) the schedule}
 
 \item{dev_cache_file}{local xlsx file to cache the spreadsheet in developer
 mode, set to \code{NULL} to never cache}
@@ -44,13 +50,15 @@ spreadsheet (with tabs \code{classes}, \code{instructors}, \code{not_teaching}, 
 \details{
 When the app runs in shiny's developer mode (\code{\link[shiny:devmode]{shiny::devmode()}}), the
 downloaded spreadsheet is cached in \code{dev_cache_file} so it is not downloaded
-again on every app reload (the Reload button clears the cache).
+again on every app reload (the Reload button clears the cache), and a
+dropdown in the sidebar allows switching between the access levels.
 }
 \examples{
 if (interactive()) {
   earthschedule_app(
     data_sheet_id = "google spreadsheet id",
-    gs_key_file = "gs_key_file.json"
+    gs_key_file = "gs_key_file.json",
+    access_level = "faculty"
   )
 }
 }

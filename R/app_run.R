@@ -7,11 +7,16 @@
 #'
 #' When the app runs in shiny's developer mode ([shiny::devmode()]), the
 #' downloaded spreadsheet is cached in `dev_cache_file` so it is not downloaded
-#' again on every app reload (the Reload button clears the cache).
+#' again on every app reload (the Reload button clears the cache), and a
+#' dropdown in the sidebar allows switching between the access levels.
 #'
 #' @param data_sheet_id id of the Google spreadsheet with the schedule data
 #' @param gs_key_file path to the json key file of the Google service account
 #'   that has access to the spreadsheet
+#' @param access_level which view of the app to provide: `"faculty"` can
+#'   select an instructor and then schedule classes and absences for that
+#'   instructor, `"admin"` can schedule classes and absences for any
+#'   instructor, and `"student"` can only view (and download) the schedule
 #' @param dev_cache_file local xlsx file to cache the spreadsheet in developer
 #'   mode, set to `NULL` to never cache
 #' @param paths_app_url url of the ERTH paths app to link to in the navbar,
@@ -24,13 +29,15 @@
 #' if (interactive()) {
 #'   earthschedule_app(
 #'     data_sheet_id = "google spreadsheet id",
-#'     gs_key_file = "gs_key_file.json"
+#'     gs_key_file = "gs_key_file.json",
+#'     access_level = "faculty"
 #'   )
 #' }
 #' @export
 earthschedule_app <- function(
   data_sheet_id,
   gs_key_file,
+  access_level = c("faculty", "admin", "student"),
   dev_cache_file = "local_data_schedule.xlsx",
   paths_app_url = "https://apps.kopflab.org/earthpaths",
   options = list()
@@ -48,12 +55,14 @@ earthschedule_app <- function(
       "`gs_key_file` must be the path to an existing service account key file"
     )
   }
+  access_level <- arg_match(access_level)
 
   shinyApp(
-    ui = app_ui(paths_app_url = paths_app_url),
+    ui = app_ui(access_level = access_level, paths_app_url = paths_app_url),
     server = app_server(
       data_sheet_id = data_sheet_id,
       gs_key_file = gs_key_file,
+      access_level = access_level,
       dev_cache_file = dev_cache_file
     ),
     options = options

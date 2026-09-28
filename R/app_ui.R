@@ -1,15 +1,21 @@
 # app UI shell: a navbar (with a link to the paths app) above a sidebar with
 # the data reload button and the schedule settings, and the schedule card as
 # the main content
+# @param access_level the access level the app starts with (see access_levels())
 # @param paths_app_url url of the ERTH paths app (NULL to omit the link)
-app_ui <- function(paths_app_url = NULL) {
+app_ui <- function(access_level = "faculty", paths_app_url = NULL) {
   app_title <- "Department of Earth Science: Teaching Preferences & Planning"
 
   # return ui function (request param required by shiny for bookmarking)
   function(request) {
     bslib::page_navbar(
-      title = app_title,
-      window_title = app_title,
+      # the access level part of the title is updated by the server (the
+      # access level can change in dev mode)
+      title = tagList(
+        app_title,
+        textOutput("access_level_title", inline = TRUE)
+      ),
+      window_title = paste0(app_title, access_level_title(access_level)),
       theme = bslib::bs_theme(version = 5),
       navbar_options = bslib::navbar_options(bg = "#f39c12", theme = "dark"),
       fillable = TRUE,
@@ -18,7 +24,8 @@ app_ui <- function(paths_app_url = NULL) {
         width = 280,
         module_data_reload_button("data"),
         module_schedule_sidebar("schedule"),
-        dev_mode_toggle_button()
+        dev_mode_toggle_button(),
+        dev_mode_access_level_select(selected = access_level)
       ),
       bslib::nav_panel(title = NULL, module_schedule_ui("schedule")),
       bslib::nav_spacer(),

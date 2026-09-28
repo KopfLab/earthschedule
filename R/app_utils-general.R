@@ -173,3 +173,31 @@ dev_mode_toggle_button <- function(id = "dev_mode_toggle") {
     actionButton(id, "Toggle Dev Mode", class = "btn-sm btn-outline-danger")
   }
 }
+
+# access levels =====
+
+# the access levels of the app (names are the labels)
+access_levels <- function() {
+  c("Admin" = "admin", "Faculty" = "faculty", "Student" = "student")
+}
+
+# the title suffix for an access level (e.g. " | Faculty View")
+access_level_title <- function(access_level) {
+  label <- names(access_levels())[access_levels() == access_level]
+  sprintf(" | %s View", label)
+}
+
+# access level dropdown (only shown when the app is started in dev mode)
+dev_mode_access_level_select <- function(
+  id = "dev_access_level",
+  selected = "faculty"
+) {
+  if (shiny::in_devmode()) {
+    selectInput(
+      id,
+      "Access level (dev mode):",
+      choices = access_levels(),
+      selected = selected
+    )
+  }
+}

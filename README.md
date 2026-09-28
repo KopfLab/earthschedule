@@ -23,9 +23,20 @@ account key file:
 # app.R
 earthschedule::earthschedule_app(
   data_sheet_id = "<google spreadsheet id>",
-  gs_key_file = "gs_key_file.json"
+  gs_key_file = "gs_key_file.json",
+  access_level = "faculty"
 )
 ```
+
+The `access_level` sets which view of the app is provided (shown in the title):
+
+- `"student"`: view and download the schedule only
+- `"faculty"` (default): select an instructor, then schedule classes and
+  teaching absences for that instructor
+- `"admin"`: schedule classes and teaching absences for any instructor
+
+To provide several views, deploy one app per access level (e.g. at different
+urls). In dev mode, a dropdown in the sidebar switches between the levels.
 
 Share the spreadsheet with the service account's email address (editor access
 is required to schedule classes and absences).
