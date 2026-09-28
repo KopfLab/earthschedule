@@ -16,7 +16,8 @@ module_schedule_server <- function(id, data, get_access_level) {
       instructor_id = NULL,
       instructor = NULL,
       edit = list(),
-      class_edit_idx = NULL
+      class_edit_idx = NULL,
+      class_dialog_warn = FALSE
     )
 
     # data functions ===========
@@ -1103,35 +1104,69 @@ module_schedule_server <- function(id, data, get_access_level) {
         ),
         class_dialog_inputs(get_class_add_prefill()),
         footer = tagList(
+          # shown if required information is missing when saving
+          span(
+            id = ns("class_dialog_warning"),
+            class = "text-danger me-auto",
+            style = "display: none;"
+          ),
           actionButton(ns("save_class"), "Add", class = "btn-primary"),
           modalButton("Cancel")
         )
       )
+      values$class_dialog_warn <- FALSE
       showModal(dlg)
-      shinyjs::toggleState("save_class", condition = toggle_save_class_add())
     })
 
-    toggle_save_class_add <- reactive({
-      return(
-        nchar(input$class_instructor_id) > 0 &&
-          nchar(input$class_term) > 0 &&
-          nchar(input$class_id) > 0 &&
-          (!stringr::str_detect(input$class_id, "new|4700|5700") ||
-            nchar(input$subtitle) > 0)
-      )
+    # required information that is missing in the class dialog
+    get_missing_class_info <- reactive({
+      is_blank <- function(x) length(x) == 0 || all(nchar(x) == 0)
+      c(
+        "instructor" = is_blank(input$class_instructor_id),
+        "term" = is_blank(input$class_term),
+        "class" = is_blank(input$class_id),
+        "special topics title" = !is_blank(input$class_id) &&
+          stringr::str_detect(input$class_id, "new|4700|5700") &&
+          is_blank(input$subtitle)
+      ) |>
+        which() |>
+        names()
     })
 
-    observeEvent(toggle_save_class_add(), {
-      req(
-        isTRUE(isolate(input$add_class) > 0) ||
-          isTRUE(isolate(input$edit_class) > 0)
-      )
-      shinyjs::toggleState("save_class", condition = toggle_save_class_add())
+    # once the warning is shown, keep it up to date with the missing information
+    observe({
+      req(values$class_dialog_warn)
+      missing <- get_missing_class_info()
+      if (length(missing) > 0) {
+        shinyjs::html(
+          "class_dialog_warning",
+          sprintf(
+            "Please provide the %s.",
+            if (length(missing) > 1) {
+              paste(
+                paste(utils::head(missing, -1), collapse = ", "),
+                "and",
+                utils::tail(missing, 1)
+              )
+            } else {
+              missing
+            }
+          )
+        )
+        shinyjs::show("class_dialog_warning")
+      } else {
+        shinyjs::hide("class_dialog_warning")
+      }
     })
 
     # save class =====
     observeEvent(input$save_class, {
       req(can_edit())
+      # required information missing?
+      if (length(get_missing_class_info()) > 0) {
+        values$class_dialog_warn <- TRUE
+        return()
+      }
       # disable inputs while saving
       c(
         "class_instructor_id",
@@ -1229,12 +1264,18 @@ module_schedule_server <- function(id, data, get_access_level) {
           record_input,
           class_dialog_inputs(get_class_edit_prefill(idx)),
           footer = tagList(
+            # shown if required information is missing when saving
+            span(
+              id = ns("class_dialog_warning"),
+              class = "text-danger me-auto",
+              style = "display: none;"
+            ),
             actionButton(ns("save_class"), "Save", class = "btn-primary"),
             modalButton("Cancel")
           )
         )
       )
-      shinyjs::toggleState("save_class", condition = toggle_save_class_add())
+      values$class_dialog_warn <- FALSE
     }
 
     observeEvent(input$edit_class, {
