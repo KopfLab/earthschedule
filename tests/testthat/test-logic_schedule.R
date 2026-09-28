@@ -193,10 +193,34 @@ test_that("schedule is combined into a table", {
   expect_equal(table[["Fall 2030"]][1], "MWF 9:00a-9:50a<br>TTH 11:00a-12:15p")
   expect_equal(table[["Spring 2031"]][3], "<i><u>yes</u></i>")
 
+  # export removes the internal columns and the html
+  export <- table |> prepare_schedule_table_export()
+  expect_equal(
+    table |>
+      dplyr::mutate(`Fall 2030` = c("no class", "?", "#?: MWF")) |>
+      prepare_schedule_table_export() |>
+      dplyr::pull("Fall 2030"),
+    c("", "", "#?: MWF")
+  )
+  expect_equal(names(export)[1:2], c("Class", "Instructor"))
+  expect_equal(export$Instructor[1], "<b>Ann</b>")
+  expect_equal(export[["Fall 2030"]][1], "MWF 9:00a-9:50a\nTTH 11:00a-12:15p")
+  expect_equal(export[["Spring 2031"]][3], "yes")
+  # each class is only listed once and "no" is left empty
+  expect_equal(
+    export$Class,
+    c("ERTH1010 (3) - Intro", "", "ERTH3030 (4) - Rocks (LAB)")
+  )
+  expect_equal(export[["Spring 2031"]][1], "")
+  expect_equal(export[["Fall 2030"]][3], "")
+
   # grouping by instructor sorts by instructor, then class
   by_instructor <- detailed |>
     prepare_schedule_table_columns(group_by = "instructor")
   expect_equal(names(by_instructor)[4:5], c("Instructor", "Class"))
+  by_instructor_export <- prepare_schedule_table_export(by_instructor)
+  expect_equal(names(by_instructor_export)[1:2], c("Instructor", "Class"))
+  expect_equal(by_instructor_export$Instructor, c("Ann Alpha", "", "Bob Beta"))
   expect_equal(
     as.character(by_instructor$Instructor),
     sort(as.character(by_instructor$Instructor))

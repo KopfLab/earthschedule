@@ -447,6 +447,36 @@ combine_schedule <- function(
 }
 
 
+# prepare the schedule table (see prepare_schedule_table_columns()) for export:
+# removes the internal columns, turns the html back into plain text (with
+# line breaks instead of <br> and without the formatting tags), leaves "no",
+# "no class" and "?" cells empty, and lists each group (class or instructor, whichever is the
+# first column) only in its first row
+prepare_schedule_table_export <- function(schedule_table) {
+  export <- schedule_table |>
+    dplyr::select(-"row", -"instructor_id", -"class") |>
+    dplyr::rename(dplyr::any_of(c(Class = "full_title"))) |>
+    dplyr::mutate(dplyr::across(dplyr::where(is.factor), as.character)) |>
+    dplyr::mutate(dplyr::across(dplyr::where(is.character), function(x) {
+      x |>
+        stringr::str_replace_all("<br>", "\n") |>
+        stringr::str_remove_all("</?(i|u)>") |>
+        stringr::str_replace_all(stringr::fixed("&lt;"), "<") |>
+        stringr::str_replace_all(stringr::fixed("&gt;"), ">") |>
+        stringr::str_replace_all(stringr::fixed("&amp;"), "&")
+    })) |>
+    dplyr::mutate(dplyr::across(
+      dplyr::matches(get_term_regexp()),
+      ~ ifelse(!is.na(.x) & .x %in% c("no", "no class", "?"), "", .x)
+    ))
+
+  # only list each group once
+  group <- export[[1]]
+  repeated <- c(FALSE, group[-1] == group[-length(group)])
+  export[[1]][!is.na(repeated) & repeated] <- ""
+  export
+}
+
 # filter the combined schedule by class level, a class is undergraduate if its
 # number is < 5000 and graduate if it is >= 5000, cross-listed classes (e.g.
 # ERTH4700/5700) are kept if any of their numbers is included, classes without

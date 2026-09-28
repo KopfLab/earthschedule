@@ -1412,7 +1412,8 @@ module_schedule_server <- function(id, data, get_access_level) {
       content = function(filename) {
         log_debug(ns = ns, "downloading data table to csv")
         get_schedule_for_table() |>
-          readr::write_csv(file = filename)
+          prepare_schedule_table_export() |>
+          readr::write_csv(file = filename, na = "")
       }
     )
   })
