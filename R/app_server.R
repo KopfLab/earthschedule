@@ -87,6 +87,30 @@ app_server <- function(
       ))
     })
 
+    # database backup (admin only)
+    observeEvent(get_access_level(), {
+      shinyjs::toggle(
+        "download_backup",
+        condition = get_access_level() == "admin"
+      )
+    })
+    output$download_backup <- downloadHandler(
+      filename = function() {
+        sprintf(
+          "earthschedule_backup_%s.xlsx",
+          format(Sys.time(), "%Y-%m-%d_%H%M")
+        )
+      },
+      content = function(file) {
+        if (get_access_level() != "admin") {
+          abort("database backups are only available in admin mode")
+        }
+        log_info("downloading database backup")
+        backup <- download_gs(data_sheet_id, gs_key_file = gs_key_file)
+        file.copy(backup, file, overwrite = TRUE)
+      }
+    )
+
     # data module
     data <- module_data_server(
       "data",

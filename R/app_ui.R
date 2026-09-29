@@ -23,6 +23,17 @@ app_ui <- function(access_level = "faculty", paths_app_url = NULL) {
       sidebar = bslib::sidebar(
         width = 280,
         module_data_reload_button("data"),
+        # database backup (admin only)
+        downloadButton(
+          "download_backup",
+          "Download Database Backup",
+          icon = icon("database"),
+          class = "btn-sm btn-outline-secondary w-100"
+        ) |>
+          shinyjs::hidden() |>
+          add_tooltip(
+            "Download the entire Google spreadsheet (all sheets) as an Excel file."
+          ),
         module_schedule_sidebar("schedule"),
         dev_mode_toggle_button(),
         dev_mode_access_level_select(selected = access_level)
