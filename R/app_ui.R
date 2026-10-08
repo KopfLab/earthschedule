@@ -3,8 +3,13 @@
 # data reload button and the schedule settings, and the schedule card as the
 # main content
 # @param access_level the access level the app starts with (see access_levels())
+# @param start_tab value of the navbar tab to show when the app starts
 # @param paths_app_url url of the ERTH paths app (NULL to omit the link)
-app_ui <- function(access_level = "faculty", paths_app_url = NULL) {
+app_ui <- function(
+  access_level = "faculty",
+  start_tab = "schedule",
+  paths_app_url = NULL
+) {
   app_title <- "Department of Earth Science: Teaching Preferences & Planning"
 
   # return ui function (request param required by shiny for bookmarking)
@@ -22,6 +27,7 @@ app_ui <- function(access_level = "faculty", paths_app_url = NULL) {
       fillable = TRUE,
       header = use_app_utils(),
       id = "main_nav",
+      selected = start_tab,
       # right-align the tabs
       bslib::nav_spacer(),
       bslib::nav_panel(
@@ -57,7 +63,18 @@ app_ui <- function(access_level = "faculty", paths_app_url = NULL) {
       ),
       coming_soon_panel("Stats", value = "stats", icon = icon("chart-bar")),
       # admin tab (only shown in admin mode, see app_server)
-      coming_soon_panel("Admin", value = "admin", icon = icon("user-shield")),
+      bslib::nav_panel(
+        title = "Admin",
+        value = "admin",
+        icon = icon("user-shield"),
+        bslib::layout_sidebar(
+          sidebar = bslib::sidebar(
+            width = 280,
+            module_admin_sidebar("admin")
+          ),
+          module_admin_ui("admin")
+        )
+      ),
       if (!is.null(paths_app_url)) {
         bslib::nav_item(
           tags$a(

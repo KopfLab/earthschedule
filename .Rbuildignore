@@ -10,3 +10,4 @@
 ^.*\.xlsx$
 ^.*\.json$
 ^credentials\.R$
+^tmp$

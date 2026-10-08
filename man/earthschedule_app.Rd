@@ -8,6 +8,7 @@ earthschedule_app(
   data_sheet_id,
   gs_key_file,
   access_level = c("faculty", "admin", "student"),
+  start_tab = c("schedule", "rooms", "stats", "admin"),
   dev_cache_file = "local_data_schedule.xlsx",
   paths_app_url = "https://apps.kopflab.org/earthpaths",
   options = list()
@@ -23,6 +24,9 @@ that has access to the spreadsheet}
 select an instructor and then schedule classes and absences for that
 instructor, \code{"admin"} can schedule classes and absences for any
 instructor, and \code{"student"} can only view (and download) the schedule}
+
+\item{start_tab}{which tab of the navbar to show when the app starts, the
+\code{"admin"} tab is only available for the \code{"admin"} access level}
 
 \item{dev_cache_file}{local xlsx file to cache the spreadsheet in developer
 mode, set to \code{NULL} to never cache}

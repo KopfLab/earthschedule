@@ -17,6 +17,8 @@
 #'   select an instructor and then schedule classes and absences for that
 #'   instructor, `"admin"` can schedule classes and absences for any
 #'   instructor, and `"student"` can only view (and download) the schedule
+#' @param start_tab which tab of the navbar to show when the app starts, the
+#'   `"admin"` tab is only available for the `"admin"` access level
 #' @param dev_cache_file local xlsx file to cache the spreadsheet in developer
 #'   mode, set to `NULL` to never cache
 #' @param paths_app_url url of the ERTH paths app to link to in the navbar,
@@ -38,6 +40,7 @@ earthschedule_app <- function(
   data_sheet_id,
   gs_key_file,
   access_level = c("faculty", "admin", "student"),
+  start_tab = c("schedule", "rooms", "stats", "admin"),
   dev_cache_file = "local_data_schedule.xlsx",
   paths_app_url = "https://apps.kopflab.org/earthpaths",
   options = list()
@@ -56,9 +59,17 @@ earthschedule_app <- function(
     )
   }
   access_level <- arg_match(access_level)
+  start_tab <- arg_match(start_tab)
+  if (start_tab == "admin" && access_level != "admin") {
+    abort("`start_tab = \"admin\"` requires `access_level = \"admin\"`")
+  }
 
   shinyApp(
-    ui = app_ui(access_level = access_level, paths_app_url = paths_app_url),
+    ui = app_ui(
+      access_level = access_level,
+      start_tab = start_tab,
+      paths_app_url = paths_app_url
+    ),
     server = app_server(
       data_sheet_id = data_sheet_id,
       gs_key_file = gs_key_file,

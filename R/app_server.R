@@ -139,6 +139,13 @@ app_server <- function(
       get_access_level = get_access_level
     )
 
+    # admin module
+    module_admin_server(
+      "admin",
+      data = data,
+      get_access_level = get_access_level
+    )
+
     # dev mode
     observeEvent(input$dev_mode_toggle, {
       shiny::devmode(!shiny::in_devmode())
