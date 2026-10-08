@@ -119,49 +119,65 @@ module_admin_server <- function(id, data, get_access_level) {
         ifelse(
           is.na(x) | !nzchar(stringr::str_trim(x)),
           missing_html,
-          htmltools::htmlEscape(dplyr::coalesce(x, "")) |>
-            stringr::str_replace_all("\n", "<br>")
+          htmltools::htmlEscape(dplyr::coalesce(x, ""))
         )
       }
-      # title with the topic of special topics classes (Title:\nTopic)
-      with_topic <- function(title, topic) {
+      # title (html) with the topic of special topics classes in a new line
+      # (missing if there is no topic), just missing if the section does not
+      # exist on that side
+      title_with_topic <- function(title, topic, exists) {
         ifelse(
-          is.na(topic) | !nzchar(topic),
-          title,
-          paste0(dplyr::coalesce(title, "?"), ":\n", topic)
+          diffs$is_topic_class & exists,
+          paste0(value(title), ":<br>", value(topic)),
+          value(title)
         )
       }
       in_both <- diffs$in_app & diffs$in_export
-      compare <- function(app, upload, differ) {
+      # compare html values
+      compare_html <- function(app, upload, differ) {
         differ <- differ | !in_both
         ifelse(
           differ,
           sprintf(
             "<span class='text-danger'>App: %s<br>Upload: %s</span>",
-            value(app),
-            value(upload)
+            app,
+            upload
           ),
-          value(app)
+          app
         )
+      }
+      compare <- function(app, upload, differ) {
+        compare_html(value(app), value(upload), differ)
       }
       diffs |>
         dplyr::mutate(
           row = dplyr::row_number(),
+          # class with the app and upload classes if they differ (e.g.
+          # ERTH4700/5700 in the app but only ERTH4700 in the upload)
           Class = ifelse(
-            !is.na(.data$app_class) & .data$app_class != .data$class,
+            .data$diff_class,
             sprintf(
-              "%s <small class='text-muted'>(%s)</small>",
+              "%s<br><small class='text-danger'>App: %s<br>Upload: %s</small>",
               .data$class,
-              htmltools::htmlEscape(dplyr::coalesce(.data$app_class, ""))
+              value(.data$app_class),
+              value(.data$export_class)
             ),
             .data$class
           ),
-          Title = compare(
-            with_topic(.data$app_title, .data$app_topic),
-            with_topic(.data$export_title, .data$export_topic),
+          Title = compare_html(
+            title_with_topic(.data$app_title, .data$app_topic, .data$in_app),
+            title_with_topic(
+              .data$export_title,
+              .data$export_topic,
+              .data$in_export
+            ),
             .data$diff_title | .data$diff_topic
           ),
-          Section = value(.data$section),
+          Section = ifelse(
+            .data$diff_section,
+            compare(.data$app_section, .data$export_section, TRUE),
+            value(.data$section)
+          ),
           Type = value(.data$component),
           Instructor = compare(
             .data$app_instructor,
@@ -259,8 +275,8 @@ module_admin_ui <- function(id) {
       "Class sections with differences are marked in red, sections without in green. ",
       "Special topics classes are listed with their topic below the title, which is the subtitle in the app and the Notes #1 in the upload. ",
       "Information that differs between the app and the upload is shown in red. ",
-      "Cross-listed classes (e.g. ERTH4021/5021) are combined into a single row ",
-      "if the information is identical for all their class numbers. ",
+      "Combined sections in the upload (see its Combined Sections column) are compared as a single cross-listed class (e.g. ERTH4021/5021). ",
+      "Special topics classes are matched by instructor and their section numbers are compared. ",
       "Use the search bar in the upper right to filter the table."
     )
   )

@@ -72,7 +72,7 @@ read_course_export <- function(file) {
       paste(missing, collapse = ", ")
     ))
   }
-  optional_cols <- c("Course Title", "Combined Sections", "Notes#1")
+  optional_cols <- c("Course Title", "Combined Sections", "Notes#1", "Notes#2")
   for (optional in optional_cols) {
     if (!optional %in% names(sections)) sections[[optional]] <- NA_character_
   }
@@ -89,16 +89,17 @@ read_course_export <- function(file) {
       meetings = .data$Meetings,
       canceled = stringr::str_detect(.data$Status, "(?i)cancel"),
       combined = .data$`Combined Sections`,
-      notes = .data$`Notes#1`
+      notes1 = .data$`Notes#1`,
+      notes2 = .data$`Notes#2`
     )
   list(term = term, sections = sections)
 }
 
 # normalization -----
 
-# normalize section numbers (e.g. "001" and "1" are the same)
+# normalize section numbers (e.g. "001", "1", and "1.0" are the same)
 normalize_section <- function(section) {
-  section <- stringr::str_trim(section)
+  section <- stringr::str_remove(stringr::str_trim(section), "\\.0+$")
   ifelse(
     stringr::str_detect(section, "^\\d+$"),
     as.character(suppressWarnings(as.integer(section))),
@@ -113,6 +114,23 @@ normalize_topic <- function(topic) {
     stringr::str_remove("^.*?(?i)topics?( seminar)?\\s*:\\s*") |>
     stringr::str_squish() |>
     dplyr::coalesce("")
+}
+
+# pick the topic of a special topics class from the notes of its sections
+# (Notes#1 and Notes#2 of all combined sections, in order): notes that mention
+# a topic (e.g. "Topic: ...") are preferred, then any notes with text (not
+# just a number such as a room), "" if there is no topic
+pick_topic <- function(notes) {
+  notes <- stringr::str_squish(notes)
+  notes <- notes[!is.na(notes) & nzchar(notes)]
+  topic <- dplyr::first(
+    c(
+      notes[stringr::str_detect(notes, "(?i)topic")],
+      notes[stringr::str_detect(notes, "[[:alpha:]]")]
+    ),
+    default = ""
+  )
+  normalize_topic(topic)
 }
 
 # normalize a person's name for comparison (lower case, letters only)
@@ -331,14 +349,58 @@ prepare_export_sections <- function(sections) {
         .data$meeting_key
       ),
       is_topic_class = .data$class %in% get_topic_classes(),
-      topic = ifelse(.data$is_topic_class, normalize_topic(.data$notes), "")
+      topic_notes = purrr::map2(.data$notes1, .data$notes2, c)
     )
 }
 
+# combine the export sections into offerings: sections that are combined
+# (cross-listed, see get_export_combined_group()) become a single offering with
+# all their class numbers (e.g. ERTH4700-001 and ERTH5700-002 become
+# ERTH4700/5700 with sections 4700-1/5700-2), the information (instructors,
+# room, meetings) is taken from the first section
+prepare_export_offerings <- function(sections) {
+  sections |>
+    dplyr::mutate(
+      group = dplyr::coalesce(
+        .data$combined_group,
+        paste0(.data$class, "-", .data$section)
+      ),
+      section_nr = suppressWarnings(as.integer(.data$section))
+    ) |>
+    dplyr::arrange(.data$class, .data$section_nr, .data$section) |>
+    dplyr::mutate(
+      .by = "group",
+      class_numbers = list(unique(.data$class)),
+      class = combine_class_names(.data$class),
+      section = if (dplyr::n_distinct(.data$section) == 1L) {
+        .data$section[1]
+      } else {
+        # e.g. 4700-1/5700-2
+        paste(
+          stringr::str_extract(.data$class_numbers[[1]], "\\d+"),
+          .data$section,
+          sep = "-",
+          collapse = "/"
+        )
+      },
+      title = dplyr::first(.data$title[!is.na(.data$title)], default = NA),
+      is_topic_class = any(.data$is_topic_class),
+      # the topic can be in the notes of any of the combined sections
+      topic = if (.data$is_topic_class[1]) {
+        pick_topic(unlist(.data$topic_notes))
+      } else {
+        ""
+      },
+      canceled = all(.data$canceled)
+    ) |>
+    dplyr::filter(!duplicated(.data$group)) |>
+    dplyr::select(-"group", -"section_nr", -"combined_group", -"topic_notes")
+}
+
 # prepare the app schedule for comparison: only the sections of the term that
-# are not deleted, cross-listed classes (e.g. ERTH4021/5021) are split into
-# their individual class numbers (e.g. ERTH4021 and ERTH5021), and placeholder
-# classes (XXXX...) are dropped
+# are not deleted, the class numbers of cross-listed classes (e.g.
+# ERTH4021/5021) are listed in class_numbers (e.g. ERTH4021 and ERTH5021), and
+# placeholder classes (XXXX...) are dropped
 prepare_app_sections <- function(schedule, instructors, term) {
   instructors <- prepare_instructors(instructors)
   if (!"subtitle" %in% names(schedule)) {
@@ -348,10 +410,9 @@ prepare_app_sections <- function(schedule, instructors, term) {
     dplyr::mutate(idx = dplyr::row_number()) |>
     dplyr::filter(.data$term == !!term, is.na(.data$deleted)) |>
     dplyr::mutate(
-      app_class = stringr::str_remove_all(.data$class, "[ \\r\\n]"),
-      class = purrr::map(.data$app_class, split_cross_listed_class)
+      class = stringr::str_remove_all(.data$class, "[ \\r\\n]"),
+      class_numbers = purrr::map(.data$class, split_cross_listed_class)
     ) |>
-    tidyr::unnest("class") |>
     dplyr::filter(!stringr::str_detect(.data$class, "^XXXX")) |>
     dplyr::mutate(
       section = normalize_section(.data$section),
@@ -393,7 +454,10 @@ prepare_app_sections <- function(schedule, instructors, term) {
       room_display = .data$room_key,
       meeting_key = get_meeting_key(.data$days, .data$start_time, .data$end_time),
       meeting_display = .data$meeting_key,
-      is_topic_class = .data$class %in% get_topic_classes(),
+      is_topic_class = purrr::map_lgl(
+        .data$class_numbers,
+        ~ any(.x %in% get_topic_classes())
+      ),
       topic = ifelse(.data$is_topic_class, normalize_topic(.data$subtitle), "")
     )
 }
@@ -412,38 +476,43 @@ split_cross_listed_class <- function(class) {
 
 # compare -----
 
-# match the sections of one class between the export and the app: sections
-# with the same section number are matched first, the remaining sections are
-# matched greedily by how similar they are (instructors, meetings, room)
-# @return tibble with export_row and app_row (NA if a section has no match)
-match_class_sections <- function(export, app) {
+# match the export offerings (see prepare_export_offerings()) with the app
+# sections, offerings can only match app sections that share at least one class
+# number, regular classes are matched by section number first and then by how
+# similar they are (same class numbers, meetings, instructors, room), special
+# topics classes (see get_topic_classes()) are only matched if they have the
+# same instructors (their section numbers are less reliable)
+# @return tibble with export_row and app_row (NA if there is no match)
+match_offerings <- function(export, app) {
   n_export <- nrow(export)
   n_app <- nrow(app)
-  if (n_export == 0 || n_app == 0) {
-    return(dplyr::tibble(
-      export_row = c(seq_len(n_export), rep(NA_integer_, n_app)),
-      app_row = c(rep(NA_integer_, n_export), seq_len(n_app))
-    ))
+  scores <- matrix(NA_real_, nrow = n_export, ncol = n_app)
+  for (i in seq_len(n_export)) {
+    for (j in seq_len(n_app)) {
+      shared <- intersect(export$class_numbers[[i]], app$class_numbers[[j]])
+      if (length(shared) == 0) next
+      same_instructors <- is_same_instructors(
+        export$instructor_last_names[[i]],
+        export$instructor_print[[i]],
+        app$instructor_last_names[[j]]
+      )
+      by_instructor <- export$is_topic_class[i] || app$is_topic_class[j]
+      if (by_instructor && !same_instructors) next
+      same_section <- !is.na(export$section[i]) &&
+        !is.na(app$section[j]) &&
+        export$section[i] == app$section[j]
+      same_classes <- setequal(export$class_numbers[[i]], app$class_numbers[[j]])
+      scores[i, j] <-
+        (if (by_instructor) 10 else 100) * same_section +
+        (if (by_instructor) 100 else 2) * same_instructors +
+        20 * same_classes +
+        4 * (export$meeting_key[i] == app$meeting_key[j]) +
+        2 * (normalize_name(export$topic[i]) == normalize_name(app$topic[j])) +
+        1 * (export$room_key[i] == app$room_key[j]) +
+        # prefer matching active with active and canceled with canceled
+        1 * (export$canceled[i] == app$canceled[j])
+    }
   }
-
-  # similarity scores
-  scores <- outer(seq_len(n_export), seq_len(n_app), Vectorize(function(i, j) {
-    same_section <- !is.na(export$section[i]) &&
-      !is.na(app$section[j]) &&
-      export$section[i] == app$section[j]
-    100 * same_section +
-      4 * (export$meeting_key[i] == app$meeting_key[j]) +
-      2 *
-        is_same_instructors(
-          export$instructor_last_names[[i]],
-          export$instructor_print[[i]],
-          app$instructor_last_names[[j]]
-        ) +
-      1 * (export$room_key[i] == app$room_key[j]) +
-      2 * (normalize_name(export$topic[i]) == normalize_name(app$topic[j])) +
-      # prefer matching active with active and canceled with canceled
-      1 * (export$canceled[i] == app$canceled[j])
-  }))
 
   # greedy matching (highest score first, ties by order)
   matches <- dplyr::tibble(export_row = integer(), app_row = integer())
@@ -470,14 +539,15 @@ match_class_sections <- function(export, app) {
 # @param instructors the instructors data
 # @param term the term to compare
 # @param classes the classes data (for the class titles), NULL to omit titles
-# @return tibble with one row per section (class, section, component,
-# is_difference, difference, and the export and app values of title,
-# topic (special topics classes only, see get_topic_classes()), instructor,
-# room, meetings, status, plus the logical columns in_export, in_app,
-# diff_title, diff_topic, diff_instructor, diff_room, diff_meetings, diff_status)
-# sorted by class and section, sections of cross-listed classes are merged
-# (see merge_cross_listed_sections()), note that title differences alone do
-# not count as a difference
+# @return tibble with one row per offering (class, the export and app classes
+# and sections, component, is_difference, difference, and the export and app
+# values of title, topic (special topics classes only, see
+# get_topic_classes()), instructor, room, meetings, status, plus the logical
+# columns in_export, in_app, diff_class, diff_section, diff_title, diff_topic,
+# diff_instructor, diff_room, diff_meetings, diff_status) sorted by class and
+# section, combined sections in the export are compared as one offering (see
+# prepare_export_offerings()), note that title differences alone do not count
+# as a difference
 compare_schedule_to_export <- function(
   export_sections,
   schedule,
@@ -485,125 +555,152 @@ compare_schedule_to_export <- function(
   term,
   classes = NULL
 ) {
-  export <- prepare_export_sections(export_sections)
+  export <- prepare_export_sections(export_sections) |>
+    prepare_export_offerings()
   app <- prepare_app_sections(schedule, instructors, term)
+  if (nrow(export) == 0 && nrow(app) == 0) {
+    abort(sprintf("there are no classes to compare for %s", term))
+  }
+
   # class titles (cross-listed classes are listed by their combined name)
+  app$title <- rep(NA_character_, nrow(app))
   if (!is.null(classes)) {
     classes <- dplyr::mutate(
       classes,
       class = stringr::str_remove_all(.data$class, "[ \\r\\n]")
     )
     app$title <- dplyr::coalesce(
-      classes$title[match(app$app_class, classes$class)],
-      classes$title[match(app$class, classes$class)]
+      classes$title[match(app$class, classes$class)],
+      classes$title[match(
+        purrr::map_chr(app$class_numbers, 1),
+        classes$class
+      )]
     )
-  } else {
-    app$title <- rep(NA_character_, nrow(app))
-  }
-  class_numbers <- sort(unique(c(export$class, app$class)))
-  if (length(class_numbers) == 0) {
-    abort(sprintf("there are no classes to compare for %s", term))
   }
 
-  diffs <- purrr::map(class_numbers, function(class) {
-    e <- export[export$class == class, ]
-    a <- app[app$class == class, ]
-    matches <- match_class_sections(e, a)
-    ei <- matches$export_row
-    ai <- matches$app_row
-    in_export <- !is.na(ei)
-    in_app <- !is.na(ai)
+  # match
+  matches <- match_offerings(export, app)
+  ei <- matches$export_row
+  ai <- matches$app_row
+  in_export <- !is.na(ei)
+  in_app <- !is.na(ai)
+  in_both <- in_export & in_app
+  get <- function(df, i, col) df[[col]][as.integer(i)]
+  get_list <- function(df, i, col) {
+    purrr::map(i, ~ if (is.na(.x)) character() else df[[col]][[.x]])
+  }
+  export_classes <- get_list(export, ei, "class_numbers")
+  app_classes <- get_list(app, ai, "class_numbers")
+  is_topic_class <- dplyr::coalesce(get(export, ei, "is_topic_class"), FALSE) |
+    dplyr::coalesce(get(app, ai, "is_topic_class"), FALSE)
+  differ <- function(x, y) {
+    in_both & dplyr::coalesce(x, "") != dplyr::coalesce(y, "")
+  }
 
-    # values (NA if the section does not exist on that side)
-    get <- function(df, i, col) df[[col]][as.integer(i)]
-    out <- dplyr::tibble(
-      class = class,
-      app_class = get(a, ai, "app_class"),
-      section = dplyr::coalesce(get(e, ei, "section"), get(a, ai, "section")),
-      component = get(e, ei, "component"),
-      export_title = get(e, ei, "title"),
-      app_title = get(a, ai, "title"),
-      is_topic_class = class %in% get_topic_classes(),
-      export_topic = get(e, ei, "topic"),
-      app_topic = get(a, ai, "topic"),
-      export_instructor = get(e, ei, "instructor_display"),
-      app_instructor = get(a, ai, "instructor_display"),
-      export_room = get(e, ei, "room_display"),
-      app_room = get(a, ai, "room_display"),
-      export_meetings = get(e, ei, "meeting_display"),
-      app_meetings = get(a, ai, "meeting_display"),
-      export_canceled = get(e, ei, "canceled"),
-      export_combined_group = get(e, ei, "combined_group"),
-      app_canceled = get(a, ai, "canceled"),
-      app_idx = get(a, ai, "idx"),
-      in_export = in_export,
-      in_app = in_app,
-      diff_title = in_export &
-        in_app &
-        normalize_name(dplyr::coalesce(get(e, ei, "title"), "")) !=
-          normalize_name(dplyr::coalesce(get(a, ai, "title"), "")),
-      diff_instructor = in_export &
-        in_app &
-        !purrr::map_lgl(seq_along(ei), function(k) {
-          if (!in_export[k] || !in_app[k]) return(TRUE)
-          is_same_instructors(
-            e$instructor_last_names[[ei[k]]],
-            e$instructor_print[[ei[k]]],
-            a$instructor_last_names[[ai[k]]]
-          )
-        }),
-      diff_room = in_export &
-        in_app &
-        dplyr::coalesce(get(e, ei, "room_key") != get(a, ai, "room_key"), FALSE),
-      diff_meetings = in_export &
-        in_app &
-        dplyr::coalesce(
-          get(e, ei, "meeting_key") != get(a, ai, "meeting_key"),
-          FALSE
-        ),
-      diff_status = in_export &
-        in_app &
-        dplyr::coalesce(get(e, ei, "canceled") != get(a, ai, "canceled"), FALSE),
-      diff_topic = in_export &
-        in_app &
-        normalize_name(dplyr::coalesce(get(e, ei, "topic"), "")) !=
-          normalize_name(dplyr::coalesce(get(a, ai, "topic"), ""))
-    )
-
-    # what is different
-    out |>
-      dplyr::mutate(
-        difference = dplyr::case_when(
-          !.data$in_app & nrow(a) == 0 ~ "class not in app",
-          !.data$in_export & nrow(e) == 0 ~ "class not in upload",
-          !.data$in_app ~ "section not in app",
-          !.data$in_export ~ "section not in upload",
-          TRUE ~
-            purrr::pmap_chr(
-              list(
-                .data$diff_topic,
-                .data$diff_instructor,
-                .data$diff_room,
-                .data$diff_meetings,
-                .data$diff_status
-              ),
-              function(...) {
-                fields <- c("topic", "instructor", "room", "meetings", "status")
-                paste(fields[c(...)], collapse = ", ")
-              }
-            )
+  compared <- dplyr::tibble(
+    class = purrr::map2_chr(
+      export_classes,
+      app_classes,
+      ~ combine_class_names(sort(union(.x, .y)))
+    ),
+    export_class = get(export, ei, "class"),
+    app_class = get(app, ai, "class"),
+    export_section = get(export, ei, "section"),
+    app_section = get(app, ai, "section"),
+    component = get(export, ei, "component"),
+    export_title = get(export, ei, "title"),
+    app_title = get(app, ai, "title"),
+    is_topic_class = is_topic_class,
+    export_topic = get(export, ei, "topic"),
+    app_topic = get(app, ai, "topic"),
+    export_instructor = get(export, ei, "instructor_display"),
+    app_instructor = get(app, ai, "instructor_display"),
+    export_room = get(export, ei, "room_display"),
+    app_room = get(app, ai, "room_display"),
+    export_meetings = get(export, ei, "meeting_display"),
+    app_meetings = get(app, ai, "meeting_display"),
+    export_canceled = get(export, ei, "canceled"),
+    app_canceled = get(app, ai, "canceled"),
+    app_idx = get(app, ai, "idx"),
+    in_export = in_export,
+    in_app = in_app,
+    diff_class = in_both & !purrr::map2_lgl(export_classes, app_classes, setequal),
+    # sections are only compared for special topics classes (and if the app
+    # has a section number), for all other classes they are part of the match
+    diff_section = differ(get(export, ei, "section"), get(app, ai, "section")) &
+      (is_topic_class | !is.na(get(app, ai, "section"))),
+    diff_title = in_both &
+      normalize_name(dplyr::coalesce(get(export, ei, "title"), "")) !=
+        normalize_name(dplyr::coalesce(get(app, ai, "title"), "")),
+    diff_topic = in_both &
+      normalize_name(dplyr::coalesce(get(export, ei, "topic"), "")) !=
+        normalize_name(dplyr::coalesce(get(app, ai, "topic"), "")),
+    diff_instructor = in_both &
+      !purrr::map_lgl(seq_along(ei), function(k) {
+        if (!in_both[k]) return(TRUE)
+        is_same_instructors(
+          export$instructor_last_names[[ei[k]]],
+          export$instructor_print[[ei[k]]],
+          app$instructor_last_names[[ai[k]]]
         )
-      ) |>
-      # canceled sections that only exist on one side are irrelevant
-      dplyr::filter(
-        !(!.data$in_app & .data$export_canceled %in% TRUE),
-        !(!.data$in_export & .data$app_canceled %in% TRUE)
+      }),
+    diff_room = differ(get(export, ei, "room_key"), get(app, ai, "room_key")),
+    diff_meetings = differ(
+      get(export, ei, "meeting_key"),
+      get(app, ai, "meeting_key")
+    ),
+    diff_status = in_both &
+      dplyr::coalesce(
+        get(export, ei, "canceled") != get(app, ai, "canceled"),
+        FALSE
       )
-  })
+  )
 
-  dplyr::bind_rows(diffs) |>
-    merge_cross_listed_sections() |>
+  # what is different
+  all_app_classes <- unique(unlist(app$class_numbers))
+  all_export_classes <- unique(unlist(export$class_numbers))
+  fields <- c(
+    "class",
+    "section",
+    "topic",
+    "instructor",
+    "room",
+    "meetings",
+    "status"
+  )
+  compared |>
     dplyr::mutate(
+      difference = dplyr::case_when(
+        !.data$in_app &
+          !purrr::map_lgl(export_classes, ~ any(.x %in% all_app_classes)) ~
+          "class not in app",
+        !.data$in_export &
+          !purrr::map_lgl(app_classes, ~ any(.x %in% all_export_classes)) ~
+          "class not in upload",
+        !.data$in_app ~ "section not in app",
+        !.data$in_export ~ "section not in upload",
+        TRUE ~
+          purrr::pmap_chr(
+            list(
+              .data$diff_class,
+              .data$diff_section,
+              .data$diff_topic,
+              .data$diff_instructor,
+              .data$diff_room,
+              .data$diff_meetings,
+              .data$diff_status
+            ),
+            function(...) paste(fields[c(...)], collapse = ", ")
+          )
+      )
+    ) |>
+    # canceled sections that only exist on one side are irrelevant
+    dplyr::filter(
+      !(!.data$in_app & .data$export_canceled %in% TRUE),
+      !(!.data$in_export & .data$app_canceled %in% TRUE)
+    ) |>
+    dplyr::mutate(
+      section = dplyr::coalesce(.data$export_section, .data$app_section),
       is_difference = .data$difference != "",
       export_status = ifelse(.data$export_canceled, "canceled", "active"),
       app_status = ifelse(.data$app_canceled, "canceled", "active"),
@@ -612,8 +709,11 @@ compare_schedule_to_export <- function(
     dplyr::arrange(.data$class, .data$section_nr, .data$section) |>
     dplyr::select(
       "class",
+      "export_class",
       "app_class",
       "section",
+      "export_section",
+      "app_section",
       "component",
       "is_difference",
       "difference",
@@ -632,6 +732,8 @@ compare_schedule_to_export <- function(
       "app_status",
       "in_export",
       "in_app",
+      "diff_class",
+      "diff_section",
       "diff_title",
       "diff_topic",
       "diff_instructor",
@@ -640,50 +742,4 @@ compare_schedule_to_export <- function(
       "diff_status",
       "app_idx"
     )
-}
-
-# merge the compared sections of cross-listed classes into a single row: rows
-# are merged if they are the same app section with identical upload
-# information (e.g. ERTH4021/5021 in the app compared to ERTH4021-001 and
-# ERTH5021-001 in the upload), or if they are combined sections in the upload
-# that are both not in the app
-merge_cross_listed_sections <- function(compared) {
-  if (nrow(compared) == 0) {
-    return(compared)
-  }
-  compared |>
-    dplyr::mutate(
-      merge_key = dplyr::case_when(
-        !is.na(.data$app_idx) ~
-          paste(
-            "app",
-            .data$app_idx,
-            .data$export_instructor,
-            .data$export_room,
-            .data$export_meetings,
-            .data$export_canceled,
-            .data$export_topic
-          ),
-        !is.na(.data$export_combined_group) ~
-          paste("combined", .data$export_combined_group),
-        TRUE ~ paste("row", dplyr::row_number())
-      )
-    ) |>
-    dplyr::mutate(
-      .by = "merge_key",
-      section = if (dplyr::n_distinct(.data$section) == 1L) {
-        .data$section
-      } else {
-        # e.g. 4700-4/5700-3
-        paste(
-          stringr::str_extract(.data$class, "\\d+"),
-          .data$section,
-          sep = "-",
-          collapse = "/"
-        )
-      },
-      class = combine_class_names(.data$class)
-    ) |>
-    dplyr::filter(!duplicated(.data$merge_key)) |>
-    dplyr::select(-"merge_key", -"export_combined_group")
 }
