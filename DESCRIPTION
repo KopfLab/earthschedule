@@ -1,6 +1,6 @@
 Package: earthschedule
 Title: Teaching Schedule Planner for the Department of Earth Sciences
-Version: 0.1.0
+Version: 0.2.0
 Authors@R: 
     person(
       given = "Sebastian", family = "Kopf",
