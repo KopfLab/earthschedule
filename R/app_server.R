@@ -87,6 +87,18 @@ app_server <- function(
       ))
     })
 
+    # admin tab (admin only)
+    observeEvent(get_access_level(), {
+      if (get_access_level() == "admin") {
+        bslib::nav_show("main_nav", "admin")
+      } else {
+        if (identical(input$main_nav, "admin")) {
+          bslib::nav_select("main_nav", "schedule")
+        }
+        bslib::nav_hide("main_nav", "admin")
+      }
+    })
+
     # database backup (admin only)
     observeEvent(get_access_level(), {
       shinyjs::toggle(
