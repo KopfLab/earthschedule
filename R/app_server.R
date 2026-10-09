@@ -87,15 +87,18 @@ app_server <- function(
       ))
     })
 
-    # admin tab (admin only)
+    # restricted tabs (rooms & stats for faculty+, admin for admin only)
     observeEvent(get_access_level(), {
-      if (get_access_level() == "admin") {
-        bslib::nav_show("main_nav", "admin")
-      } else {
-        if (identical(input$main_nav, "admin")) {
-          bslib::nav_select("main_nav", "schedule")
+      hidden <- hidden_tabs(get_access_level())
+      if (isTRUE(input$main_nav %in% hidden)) {
+        bslib::nav_select("main_nav", "schedule")
+      }
+      for (tab in names(restricted_tabs())) {
+        if (tab %in% hidden) {
+          bslib::nav_hide("main_nav", tab)
+        } else {
+          bslib::nav_show("main_nav", tab)
         }
-        bslib::nav_hide("main_nav", "admin")
       }
     })
 

@@ -186,6 +186,22 @@ access_levels <- function() {
   c("Admin" = "admin", "Faculty" = "faculty", "Student" = "student")
 }
 
+# the navbar tabs that are restricted to certain access levels (tabs not
+# listed here are visible at all access levels)
+restricted_tabs <- function() {
+  list(
+    rooms = c("admin", "faculty"),
+    stats = c("admin", "faculty"),
+    admin = c("admin")
+  )
+}
+
+# the restricted navbar tabs that are hidden at an access level
+hidden_tabs <- function(access_level) {
+  tabs <- restricted_tabs()
+  names(tabs)[!vapply(tabs, `%in%`, x = access_level, logical(1))]
+}
+
 # the title suffix for an access level (e.g. " | Faculty View")
 access_level_title <- function(access_level) {
   label <- names(access_levels())[access_levels() == access_level]

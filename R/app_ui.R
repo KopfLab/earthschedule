@@ -11,6 +11,10 @@ app_ui <- function(
   paths_app_url = NULL
 ) {
   app_title <- "Department of Earth Science: Teaching Preferences & Planning"
+  # don't start on a tab that is hidden at this access level
+  if (start_tab %in% hidden_tabs(access_level)) {
+    start_tab <- "schedule"
+  }
 
   # return ui function (request param required by shiny for bookmarking)
   function(request) {
@@ -56,13 +60,13 @@ app_ui <- function(
           module_schedule_ui("schedule", access_level = access_level)
         )
       ),
+      # restricted tabs (shown depending on the access level, see app_server)
       coming_soon_panel(
         "Rooms",
         value = "rooms",
         icon = icon("person-chalkboard")
       ),
       coming_soon_panel("Stats", value = "stats", icon = icon("chart-bar")),
-      # admin tab (only shown in admin mode, see app_server)
       bslib::nav_panel(
         title = "Admin",
         value = "admin",
