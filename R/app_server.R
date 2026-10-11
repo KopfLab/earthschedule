@@ -154,7 +154,11 @@ app_server <- function(
     )
 
     # stats module
-    module_stats_server("stats", get_courses = get_courses)
+    module_stats_server(
+      "stats",
+      get_courses = get_courses,
+      is_visible = reactive(identical(input$main_nav, "stats"))
+    )
 
     # dev mode
     observeEvent(input$dev_mode_toggle, {

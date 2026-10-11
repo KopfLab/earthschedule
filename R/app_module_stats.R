@@ -2,13 +2,26 @@
 # plots by class, class type or total (see logic_enrollment.R)
 # @param get_courses function returning the course summary (see
 #   sch_read_courses()), NULL if no enrollment data is available
-module_stats_server <- function(id, get_courses = NULL) {
+# @param is_visible reactive returning whether the stats tab is visible (the
+#   enrollment data is only read once the tab is first shown)
+module_stats_server <- function(
+  id,
+  get_courses = NULL,
+  is_visible = reactive(TRUE)
+) {
   moduleServer(id, function(input, output, session) {
     # namespace
     ns <- session$ns
 
-    # course summary (only read when the stats tab is first rendered)
+    # whether the tab was shown (stays TRUE once it was)
+    was_shown <- reactiveVal(FALSE)
+    observeEvent(is_visible(), {
+      if (isTRUE(is_visible())) was_shown(TRUE)
+    })
+
+    # course summary (only read once the stats tab is first shown)
     get_data <- reactive({
+      req(was_shown())
       validate(need(
         !is.null(get_courses),
         "No enrollment data file was provided to the app."

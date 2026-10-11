@@ -97,15 +97,69 @@ earthschedule_app <- function(
 }
 
 # read the enrollment data only once (on first use) for all app sessions
+# the processed course summary is cached in an .rds file next to the data file
+# (if it can be written) that is used instead of re-reading the data file as
+# long as neither the data file nor the processing functions changed
 # @param file path to the enrollment & SCH data export
 # @return function returning the course summary (see sch_read_courses())
 cache_enrollment_data <- function(file) {
   courses <- NULL
   function() {
     if (is.null(courses)) {
-      log_info("reading enrollment data from '", basename(file), "'")
-      courses <<- sch_read_courses(file)
+      courses <<- read_enrollment_data_cached(file)
     }
     courses
   }
+}
+
+# read the enrollment data from the .rds cache (if up to date) or the data file
+# @param file path to the enrollment & SCH data export
+# @return the course summary (see sch_read_courses())
+read_enrollment_data_cached <- function(file) {
+  cache_file <- paste0(tools::file_path_sans_ext(file), ".rds")
+  key <- get_enrollment_cache_key(file)
+
+  # cached
+  if (file.exists(cache_file)) {
+    cache <- tryCatch(readRDS(cache_file), error = function(e) NULL)
+    if (identical(cache$key, key)) {
+      log_info("reading enrollment data from cache '", basename(cache_file), "'")
+      return(cache$courses)
+    }
+  }
+
+  # read and cache
+  log_info("reading enrollment data from '", basename(file), "'")
+  courses <- sch_read_courses(file)
+  tryCatch(
+    {
+      tmp_file <- tempfile(tmpdir = dirname(cache_file), fileext = ".rds")
+      saveRDS(list(key = key, courses = courses), tmp_file)
+      if (!file.rename(tmp_file, cache_file)) {
+        unlink(tmp_file)
+        abort("could not write the cache file")
+      }
+      log_info("cached enrollment data in '", basename(cache_file), "'")
+    },
+    error = function(e) {
+      log_warning("could not cache the enrollment data: ", conditionMessage(e))
+    }
+  )
+  courses
+}
+
+# cache key of the enrollment data: hash of the data file contents and of the
+# processing functions (all sch_ objects of the package)
+# @param file path to the enrollment & SCH data export
+get_enrollment_cache_key <- function(file) {
+  ns <- asNamespace("earthschedule")
+  objects <- sort(ls(ns, pattern = "^sch_"))
+  processing <- lapply(objects, \(x) {
+    obj <- get(x, envir = ns)
+    if (is.function(obj)) deparse(body(obj)) else obj
+  })
+  list(
+    file = rlang::hash_file(file),
+    processing = rlang::hash(processing)
+  )
 }
