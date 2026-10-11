@@ -536,20 +536,63 @@ sch_assign_periods <- function(df, period = "semester", n_years = 3) {
 
 # summaries by class, class type and total =====
 
-# label the classes by their modern course code and most recent title
+# label the classes by their modern course codes and most recent title
 # @param df course summary from sch_summarize_courses()
-# @return data frame with Class, code (e.g. "ERTH1010"), title and label
-#   (e.g. "ERTH1010 Exploring Earth")
+# @return data frame with Class, code (e.g. "ERTH4185"), courses (all
+#   cross-listed codes the last time the class was taught, e.g.
+#   "ERTH4185/5185/MCDB4185"), title and label (e.g.
+#   "ERTH4185/5185/MCDB4185 Geomicrobiology")
 sch_label_classes <- function(df) {
   df |>
     dplyr::summarize(
       code = dplyr::last(.data$Spnsr_Course, order_by = .data$YearTerm) |>
         sch_modernize_codes(),
+      courses = dplyr::last(.data$Courses, order_by = .data$YearTerm) |>
+        sch_modernize_codes() |>
+        sch_shorten_codes(),
       title = dplyr::last(.data$CRSTITLE, order_by = .data$YearTerm),
-      label = paste(.data$code, .data$title),
+      label = paste(.data$courses, .data$title),
       .by = "Class"
     ) |>
     dplyr::arrange(.data$Class)
+}
+
+# shorten combined course codes by grouping them by subject (in order of
+# first appearance) and omitting repeated subjects
+# @param x combined course codes (e.g. "ERTH4185/MCDB4185/ERTH5185")
+# @return shortened codes (e.g. "ERTH4185/5185/MCDB4185")
+sch_shorten_codes <- function(x) {
+  purrr::map_chr(stringr::str_split(x, "/"), \(codes) {
+    subjects <- stringr::str_extract(codes, "^[A-Z]{4}")
+    order <- order(match(subjects, unique(subjects)))
+    codes <- codes[order]
+    subjects <- subjects[order]
+    repeated <- !is.na(subjects) &
+      subjects == dplyr::lag(subjects, default = "")
+    codes[repeated] <- stringr::str_remove(codes[repeated], "^[A-Z]{4}")
+    paste(codes, collapse = "/")
+  })
+}
+
+# find the classes of a course code (e.g. from the schedule)
+# @param df course summary from sch_summarize_courses()
+# @param code course code, cross-listed course numbers can be separated by /
+#   (e.g. "ERTH4444/5444")
+# @return the codes (see sch_label_classes()) of the classes that include any
+#   of the course numbers (as sponsoring or cross-listed course)
+sch_find_classes <- function(df, code) {
+  subject <- stringr::str_extract(code, "^[A-Z]{4}")
+  codes <- paste0(subject, stringr::str_extract_all(code, "\\d{4}")[[1]])
+  classes <- df |>
+    dplyr::filter(purrr::map_lgl(
+      stringr::str_split(sch_modernize_codes(.data$Courses), "/"),
+      \(x) any(x %in% codes)
+    )) |>
+    dplyr::pull(.data$Class) |>
+    unique()
+  sch_label_classes(df) |>
+    dplyr::filter(.data$Class %in% classes) |>
+    dplyr::pull(.data$code)
 }
 
 # select classes by their modern course code
@@ -699,7 +742,8 @@ sch_summarize_classes <- function(
     ) |>
     sch_summarize_values(by = "Class") |>
     dplyr::left_join(
-      sch_label_classes(df) |> dplyr::select("Class", "code", "label"),
+      sch_label_classes(df) |>
+        dplyr::select("Class", "code", "courses", "label"),
       by = "Class"
     ) |>
     dplyr::mutate(has_ta = .data$n_classes_with_ta > 0) |>
@@ -1591,7 +1635,13 @@ sch_get_export_data <- function(
     sch_round_values()
   if (plot_type == "classes") {
     summary <- summary |>
-      dplyr::select("period", course = "code", dplyr::everything(), -"Class")
+      dplyr::select(
+        "period",
+        course = "courses",
+        dplyr::everything(),
+        -"Class",
+        -"code"
+      )
   }
   if (plot_type == "class_types") {
     summary <- summary |>

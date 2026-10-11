@@ -6,7 +6,15 @@
 # server
 # @param plot_func reactive returning the ggplot to save
 # @param filename_func reactive returning the default filename
-plot_download_server <- function(id, plot_func, filename_func) {
+# @param return_dialog_func reactive returning the dialog to return to when the
+#   save dialog is closed (e.g. if the plot is itself shown in a dialog), NULL
+#   to just close the save dialog
+plot_download_server <- function(
+  id,
+  plot_func,
+  filename_func,
+  return_dialog_func = NULL
+) {
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
 
@@ -14,7 +22,7 @@ plot_download_server <- function(id, plot_func, filename_func) {
       modalDialog(
         title = "Save plot",
         fade = FALSE,
-        easyClose = TRUE,
+        easyClose = is.null(return_dialog_func),
         size = "s",
         textInput(ns("save_name"), "Filename:", filename_func()),
         numericInput(ns("save_width"), "Width [inches]:", 14),
@@ -25,11 +33,16 @@ plot_download_server <- function(id, plot_func, filename_func) {
             label = "Download",
             icon = icon("download")
           ),
-          modalButton("Close")
+          if (is.null(return_dialog_func)) {
+            modalButton("Close")
+          } else {
+            actionButton(ns("close"), "Close")
+          }
         )
       )
     })
     observeEvent(input$download_dialog, showModal(save_dialog()))
+    observeEvent(input$close, showModal(return_dialog_func()))
 
     output$download <- downloadHandler(
       filename = function() isolate(input$save_name),

@@ -20,6 +20,7 @@
 #' @param render_html list of columns which should NOT be html escaped (e.g. for links), use dplyr::everything() to render everything
 #' @param formatting_calls list of lists with function and columns e.g. list(list(func = formatCurrency, columns = "x)) or a columns expressione.g. list(list(func = formatCurrencty, columns_expr = rlang::expr(matches("abc"))))
 #' @param paging TRUE/FALSE whether to have paging information
+#' @param report_group_dblclick whether to report double-clicks on RowGroup summary rows (with the ids of the group's rows) via the returned get_group_dblclick() without selecting the rows
 #' @param ... additional dat table options (https://datatables.net/reference/option/) passed to options
 module_selector_table_server <- function(
   id,
@@ -42,6 +43,7 @@ module_selector_table_server <- function(
   selection = c("multiple", "single", "none"),
   auto_reselect = TRUE,
   select_on_dblclick = FALSE,
+  report_group_dblclick = FALSE,
   render_html = c(),
   formatting_calls = list(),
   editable = FALSE,
@@ -232,10 +234,11 @@ module_selector_table_server <- function(
                 ),
                 callback = {
                   callback_js <- character(0)
-                  if (select_on_dblclick) {
-                    # double-click to EXCLUSIVELY select: a data row reports its
-                    # own id (-> _row_dblclick); a RowGroup summary row collects
-                    # the ids of all its data rows (-> _group_dblclick)
+                  if (select_on_dblclick || report_group_dblclick) {
+                    # double-click to EXCLUSIVELY select / report: a data row
+                    # reports its own id (-> _row_dblclick); a RowGroup summary
+                    # row collects the ids of all its data rows
+                    # (-> _group_dblclick)
                     callback_js <- c(
                       callback_js,
                       "table.on('dblclick', 'tbody tr', function() {",
@@ -548,12 +551,14 @@ module_selector_table_server <- function(
     # event then drives values$selected_ids -> downstream, so the table
     # highlights FIRST and any consumers (file server, plot) update after.
     observeEvent(input$selection_table_row_dblclick, {
+      req(select_on_dblclick)
       DT::selectRows(
         proxy,
         get_index_from_id(input$selection_table_row_dblclick)
       )
     })
     observeEvent(input$selection_table_group_dblclick, {
+      req(select_on_dblclick)
       group_ids <- input$selection_table_group_dblclick
       if (length(group_ids) > 0) {
         DT::selectRows(proxy, get_index_from_id(group_ids))
@@ -776,6 +781,8 @@ module_selector_table_server <- function(
       get_selected_ids = get_selected_ids,
       get_selected_cells = get_selected_cells,
       get_selected_items = get_selected_items,
+      # ids of the rows of a double-clicked group (if report_group_dblclick)
+      get_group_dblclick = function() input$selection_table_group_dblclick,
       # action functions
       select_rows = select_rows,
       select_all = select_all,

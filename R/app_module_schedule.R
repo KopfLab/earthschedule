@@ -1,7 +1,14 @@
 # schedule module server
 # @param data the data module (see module_data_server())
 # @param get_access_level reactive returning the access level (see access_levels())
-module_schedule_server <- function(id, data, get_access_level) {
+# @param get_courses function returning the enrollment course summary (see
+#   sch_read_courses()) for the class stats dialog, NULL if not available
+module_schedule_server <- function(
+  id,
+  data,
+  get_access_level,
+  get_courses = NULL
+) {
   moduleServer(id, function(input, output, session) {
     # namespace
     ns <- session$ns
@@ -24,7 +31,10 @@ module_schedule_server <- function(id, data, get_access_level) {
       instructor = NULL,
       edit = list(),
       class_edit_idx = NULL,
-      class_dialog_warn = FALSE
+      class_dialog_warn = FALSE,
+      stats_class = NULL,
+      stats_classes = NULL,
+      stats_title = NULL
     )
 
     # data functions ===========
@@ -511,7 +521,180 @@ module_schedule_server <- function(id, data, get_access_level) {
       dom = "ft",
       ordering = FALSE,
       scrollX = TRUE,
-      selection = list(mode = "single", target = "cell")
+      selection = list(mode = "single", target = "cell"),
+      report_group_dblclick = TRUE
+    )
+
+    # class stats dialog ======
+
+    # enrollment data (NULL if not available)
+    get_stats_courses <- reactive({
+      req(!is.null(get_courses))
+      tryCatch(get_courses(), error = function(e) {
+        log_error(
+          ns = ns,
+          "failed to read the enrollment data",
+          user_msg = "Could not read the enrollment data",
+          error = e
+        )
+        NULL
+      })
+    })
+
+    # the last 7 years (14 semesters) of the enrollment data
+    stats_n_semesters <- 14
+
+    # double-clicking a class (group row) shows its enrollment, SCH and TA
+    # equivalents per semester for the last semesters of the enrollment data
+    # (if grouped by class and the stats are available at this access level)
+    observeEvent(schedule_table$get_group_dblclick(), {
+      req(
+        !is.null(get_courses),
+        identical(input$group_by, "class"),
+        get_access_level() %in% restricted_tabs()$stats
+      )
+      class <- get_schedule_for_table() |>
+        dplyr::filter(.data$row %in% schedule_table$get_group_dblclick()) |>
+        dplyr::pull(.data$class) |>
+        as.character() |>
+        unique()
+      # (not for the absences)
+      req(length(class) == 1, !stringr::str_detect(class, "^XXXX"))
+      log_info(ns = ns, "showing enrollment stats for ", class)
+      values$stats_class <- class
+
+      # the classes in the enrollment data (incl. cross-listed course numbers)
+      courses <- get_stats_courses()
+      values$stats_classes <- if (!is.null(courses)) {
+        sch_find_classes(courses, class)
+      }
+
+      # title: all course codes and most recent title of the class(es)
+      values$stats_title <- if (length(values$stats_classes) > 0) {
+        labels <- sch_label_classes(courses)
+        labels$label[labels$code %in% values$stats_classes] |>
+          paste(collapse = " & ")
+      } else {
+        paste(class, get_classes()$title[get_classes()$class == class][1])
+      }
+      showModal(get_stats_dialog())
+    })
+
+    # the class stats dialog
+    get_stats_dialog <- reactive({
+      modalDialog(
+        title = values$stats_title,
+        size = "xl",
+        easyClose = TRUE,
+        # make the dialog (almost) fullscreen with the plot filling the space
+        # between the header and footer
+        tags$style(HTML(
+          ".modal-dialog:has(.class-stats-modal) {
+            max-width: none; width: calc(100vw - 2rem);
+            height: calc(100vh - 2rem); margin: 1rem auto;
+          }
+          .modal-dialog:has(.class-stats-modal) .modal-content {
+            height: 100%;
+          }
+          .modal-dialog:has(.class-stats-modal) .modal-body {
+            flex: 1 1 auto; min-height: 0; padding-top: 0.5rem;
+            padding-bottom: 0.5rem;
+          }
+          .class-stats-modal, .class-stats-modal > .shiny-spinner-output-container {
+            height: 100%;
+          }"
+        )),
+        div(
+          class = "class-stats-modal",
+          plotOutput(ns("class_stats_plot"), height = "100%") |>
+            shinycssloaders::withSpinner()
+        ),
+        footer = div(
+          class = "d-flex align-items-center w-100 gap-3",
+          div(
+            class = "text-muted small me-auto",
+            "Lecture values are solid and lab values are transparent and stacked on top, both outlined by section. ",
+            "A # above a bar means the class has a teaching assistant, this information is likely incomplete and cannot distinguish between 25% and 50% TAs. ",
+            actionLink(ns("open_stats"), "See the Stats tab for more details.")
+          ),
+          plot_download_link(
+            ns("class_stats_download"),
+            label = "Save Plot",
+            class = "text-nowrap"
+          ),
+          modalButton("Close")
+        )
+      )
+    })
+
+    # switch to the stats tab
+    observeEvent(input$open_stats, {
+      removeModal()
+      bslib::nav_select("main_nav", "stats", session = session$rootScope())
+    })
+
+    # the class stats plot
+    get_class_stats_plot <- reactive({
+      req(values$stats_class)
+      courses <- get_stats_courses()
+      req(courses)
+      terms <- utils::tail(sch_get_semesters(courses), stats_n_semesters)
+      # (only the classes with data in these terms)
+      in_terms <- sch_filter_courses(
+        courses,
+        include_summer = FALSE,
+        include_grad = TRUE,
+        include_grad_field = TRUE,
+        from = terms[1],
+        to = utils::tail(terms, 1)
+      )
+      classes <- values$stats_classes
+      classes <- classes[stringr::str_sub(classes, 5) %in% in_terms$Class]
+      validate(need(
+        length(classes) > 0,
+        sprintf(
+          "There is no enrollment data for %s from %s to %s.",
+          values$stats_class,
+          terms[1],
+          utils::tail(terms, 1)
+        )
+      ))
+      sch_plot_top_classes(
+        courses,
+        values = c("enrollment", "SCH", "TA"),
+        top_based_on = "TA",
+        classes = classes,
+        n_top = length(classes),
+        show_other = FALSE,
+        show_class_numbers = FALSE,
+        period = "semester",
+        from = terms[1],
+        to = utils::tail(terms, 1),
+        include_grad = TRUE,
+        include_grad_field = TRUE,
+        base_size = 13
+      ) +
+        ggplot2::labs(subtitle = NULL) +
+        # (legend only if there are multiple classes)
+        ggplot2::theme(
+          legend.position = if (length(classes) == 1) "none" else "right"
+        )
+    })
+    output$class_stats_plot <- renderPlot(get_class_stats_plot(), res = 96)
+
+    # PDF download of the class stats plot (with the class as title)
+    plot_download_server(
+      "class_stats_download",
+      plot_func = reactive(
+        get_class_stats_plot() + ggplot2::labs(title = values$stats_title)
+      ),
+      filename_func = reactive(paste0(
+        format(Sys.time(), "%Y-%m-%d_%H-%M-%S"),
+        "_enrollment_",
+        values$stats_class,
+        ".pdf"
+      )),
+      return_dialog_func = get_stats_dialog
     )
 
     # formatting the schedule for easy visibility

@@ -142,7 +142,8 @@ app_server <- function(
     module_schedule_server(
       "schedule",
       data = data,
-      get_access_level = get_access_level
+      get_access_level = get_access_level,
+      get_courses = get_courses
     )
 
     # admin module
