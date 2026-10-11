@@ -19,6 +19,10 @@
 #'   instructor, and `"student"` can only view (and download) the schedule
 #' @param start_tab which tab of the navbar to show when the app starts, the
 #'   `"admin"` tab is only available for the `"admin"` access level
+#' @param enrollment_data_file path to the enrollment & SCH data export (xlsx
+#'   file with a `Detail` tab) for the Stats tab, set to `NULL` if not
+#'   available. The file is read once (when the Stats tab is first opened) and
+#'   shared by all sessions of the app.
 #' @param dev_cache_file local xlsx file to cache the spreadsheet in developer
 #'   mode, set to `NULL` to never cache
 #' @param paths_app_url url of the ERTH paths app to link to in the navbar,
@@ -32,6 +36,7 @@
 #'   earthschedule_app(
 #'     data_sheet_id = "google spreadsheet id",
 #'     gs_key_file = "gs_key_file.json",
+#'     enrollment_data_file = "enrollment_data.xlsx",
 #'     access_level = "faculty"
 #'   )
 #' }
@@ -41,6 +46,7 @@ earthschedule_app <- function(
   gs_key_file,
   access_level = c("faculty", "admin", "student"),
   start_tab = c("schedule", "rooms", "stats", "admin"),
+  enrollment_data_file = NULL,
   dev_cache_file = "local_data_schedule.xlsx",
   paths_app_url = "https://apps.kopflab.org/earthpaths",
   options = list()
@@ -58,6 +64,13 @@ earthschedule_app <- function(
       "`gs_key_file` must be the path to an existing service account key file"
     )
   }
+  if (
+    !is.null(enrollment_data_file) &&
+      (!is_scalar_character(enrollment_data_file) ||
+        !file.exists(enrollment_data_file))
+  ) {
+    abort("`enrollment_data_file` must be the path to an existing file")
+  }
   access_level <- arg_match(access_level)
   start_tab <- arg_match(start_tab)
   if (start_tab == "admin" && access_level != "admin") {
@@ -74,8 +87,25 @@ earthschedule_app <- function(
       data_sheet_id = data_sheet_id,
       gs_key_file = gs_key_file,
       access_level = access_level,
-      dev_cache_file = dev_cache_file
+      dev_cache_file = dev_cache_file,
+      get_courses = if (!is.null(enrollment_data_file)) {
+        cache_enrollment_data(enrollment_data_file)
+      }
     ),
     options = options
   )
+}
+
+# read the enrollment data only once (on first use) for all app sessions
+# @param file path to the enrollment & SCH data export
+# @return function returning the course summary (see sch_read_courses())
+cache_enrollment_data <- function(file) {
+  courses <- NULL
+  function() {
+    if (is.null(courses)) {
+      log_info("reading enrollment data from '", basename(file), "'")
+      courses <<- sch_read_courses(file)
+    }
+    courses
+  }
 }

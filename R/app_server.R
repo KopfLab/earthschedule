@@ -51,11 +51,14 @@ app_data_sheets <- function() {
 
 # app server
 # @param access_level the access level the app starts with (see access_levels())
+# @param get_courses function returning the enrollment course summary for the
+#   stats tab (see module_stats_server()), NULL if not available
 app_server <- function(
   data_sheet_id,
   gs_key_file,
   access_level = "faculty",
-  dev_cache_file = NULL
+  dev_cache_file = NULL,
+  get_courses = NULL
 ) {
   function(input, output, session) {
     log_info("\n\n========================================================")
@@ -148,6 +151,9 @@ app_server <- function(
       data = data,
       get_access_level = get_access_level
     )
+
+    # stats module
+    module_stats_server("stats", get_courses = get_courses)
 
     # dev mode
     observeEvent(input$dev_mode_toggle, {

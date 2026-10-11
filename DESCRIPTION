@@ -25,6 +25,7 @@ Imports:
     DT,
     forcats,
     gargle,
+    ggplot2 (>= 3.5.0),
     googledrive,
     googlesheets4,
     htmltools,
@@ -35,6 +36,7 @@ Imports:
     readxl,
     rlang (>= 1.1.0),
     rlog,
+    scales,
     shiny,
     shinycssloaders,
     shinyjs,
@@ -43,7 +45,8 @@ Imports:
     tibble,
     tidyr (>= 1.3.0),
     tidyselect,
-    utils
+    utils,
+    writexl
 Suggests:
     testthat (>= 3.0.0)
 Config/testthat/edition: 3

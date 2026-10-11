@@ -9,6 +9,7 @@ earthschedule_app(
   gs_key_file,
   access_level = c("faculty", "admin", "student"),
   start_tab = c("schedule", "rooms", "stats", "admin"),
+  enrollment_data_file = NULL,
   dev_cache_file = "local_data_schedule.xlsx",
   paths_app_url = "https://apps.kopflab.org/earthpaths",
   options = list()
@@ -27,6 +28,11 @@ instructor, and \code{"student"} can only view (and download) the schedule}
 
 \item{start_tab}{which tab of the navbar to show when the app starts, the
 \code{"admin"} tab is only available for the \code{"admin"} access level}
+
+\item{enrollment_data_file}{path to the enrollment & SCH data export (xlsx
+file with a \code{Detail} tab) for the Stats tab, set to \code{NULL} if not
+available. The file is read once (when the Stats tab is first opened) and
+shared by all sessions of the app.}
 
 \item{dev_cache_file}{local xlsx file to cache the spreadsheet in developer
 mode, set to \code{NULL} to never cache}
@@ -62,6 +68,7 @@ if (interactive()) {
   earthschedule_app(
     data_sheet_id = "google spreadsheet id",
     gs_key_file = "gs_key_file.json",
+    enrollment_data_file = "enrollment_data.xlsx",
     access_level = "faculty"
   )
 }

@@ -1,7 +1,8 @@
 # app UI shell: a navbar with the top level tabs (Schedule, Rooms, Stats,
 # Admin) and a link to the paths app; the Schedule tab has a sidebar with the
 # data reload button and the schedule settings, and the schedule card as the
-# main content
+# main content; the Stats tab has a sidebar with the plot settings and the
+# enrollment plot as the main content
 # @param access_level the access level the app starts with (see access_levels())
 # @param start_tab value of the navbar tab to show when the app starts
 # @param paths_app_url url of the ERTH paths app (NULL to omit the link)
@@ -66,7 +67,18 @@ app_ui <- function(
         value = "rooms",
         icon = icon("person-chalkboard")
       ),
-      coming_soon_panel("Stats", value = "stats", icon = icon("chart-bar")),
+      bslib::nav_panel(
+        title = "Stats",
+        value = "stats",
+        icon = icon("chart-bar"),
+        bslib::layout_sidebar(
+          sidebar = bslib::sidebar(
+            width = 280,
+            module_stats_sidebar("stats")
+          ),
+          module_stats_ui("stats")
+        )
+      ),
       bslib::nav_panel(
         title = "Admin",
         value = "admin",

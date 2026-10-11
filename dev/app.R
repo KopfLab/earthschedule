@@ -8,6 +8,7 @@ source("credentials.R")
 earthschedule_app(
   data_sheet_id = schedule_gs_id,
   gs_key_file = key_file,
+  enrollment_data_file = "2026_2_IGroup_Detail_1038_20261008_Detail_only.xlsx",
   dev_cache_file = "local_data_schedule.xlsx",
   options = list(port = 4444),
   access_level = "admin",
