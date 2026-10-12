@@ -123,6 +123,30 @@ module_stats_server <- function(
     }) |>
       debounce(500)
 
+    # note about academic years missing from the data (for academic years and
+    # running averages)
+    output$missing_years <- renderUI({
+      courses <- get_data()
+      req(courses)
+      params <- get_params()
+      req(params$period != "semester")
+      missing <- sch_find_missing_years(courses, params$from, params$to)
+      req(length(missing) > 0)
+      paste0(
+        paste(missing, collapse = ", "),
+        if (length(missing) == 1) " is" else " are",
+        " not part of the enrollment data and therefore not shown",
+        if (params$period == "running") {
+          paste0(
+            ", running averages that would include ",
+            if (length(missing) == 1) "it" else "them",
+            " are left out"
+          )
+        },
+        ". "
+      )
+    })
+
     get_plot <- reactive({
       courses <- get_data()
       req(courses)
@@ -451,6 +475,7 @@ module_stats_ui <- function(id) {
         sch_per_ta_lab
       ),
       "Summers are not included, academic years are fall + spring (e.g. AY24 = Fall 2023 + Spring 2024) and only complete academic years are shown. ",
+      uiOutput(ns("missing_years"), inline = TRUE),
       "Classes are matched by course number across the GEOL to ERTH rename."
     )
   )

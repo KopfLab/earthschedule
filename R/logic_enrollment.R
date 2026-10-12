@@ -442,6 +442,31 @@ sch_period_value_cols <- c(
   "ta"
 )
 
+# find the academic years that are missing from the data (neither fall nor
+# spring semester, e.g. AY21 is not part of the enrollment data export)
+# @param df course summary from sch_summarize_courses()
+# @param from first semester to consider (e.g. "Fall 2018"), NULL for all
+# @param to last semester to consider, NULL for all
+# @return academic years (e.g. "AY21") between the first and last academic
+#   year in the range that have no data
+sch_find_missing_years <- function(df, from = NULL, to = NULL) {
+  years <- df |>
+    sch_filter_courses(
+      include_summer = FALSE,
+      include_grad = TRUE,
+      include_grad_field = TRUE,
+      from = from,
+      to = to
+    ) |>
+    dplyr::pull(.data$FYC) |>
+    unique()
+  if (length(years) == 0) {
+    return(character(0))
+  }
+  missing <- setdiff(seq(min(years), max(years)), years)
+  sprintf("AY%02d", missing %% 100)
+}
+
 # describe a period
 # @param period one of sch_periods
 # @param n_years number of academic years in the running averages
