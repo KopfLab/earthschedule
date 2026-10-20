@@ -3,11 +3,14 @@
 # @param get_access_level reactive returning the access level (see access_levels())
 # @param get_courses function returning the enrollment course summary (see
 #   sch_read_courses()) for the class stats dialog, NULL if not available
+# @param class_files the class files module (see module_class_files_server())
+#   to show the class file icons next to the classes, NULL if not available
 module_schedule_server <- function(
   id,
   data,
   get_access_level,
-  get_courses = NULL
+  get_courses = NULL,
+  class_files = NULL
 ) {
   moduleServer(id, function(input, output, session) {
     # namespace
@@ -357,6 +360,22 @@ module_schedule_server <- function(
         )
     })
 
+    # schedule for the data table with the class file icons next to the
+    # classes (not part of get_schedule_for_table() to keep them out of the
+    # download)
+    get_schedule_for_display <- reactive({
+      schedule <- get_schedule_for_table()
+      if (is.null(class_files)) {
+        return(schedule)
+      }
+      col <- if ("full_title" %in% names(schedule)) "full_title" else "Class"
+      schedule[[col]] <- paste0(
+        schedule[[col]],
+        class_files$get_icons(schedule$class)
+      )
+      schedule
+    })
+
     # generate UI =====================
 
     # sidebar GUI
@@ -506,7 +525,7 @@ module_schedule_server <- function(
 
     schedule_table <- module_selector_table_server(
       "schedule",
-      get_data = get_schedule_for_table,
+      get_data = get_schedule_for_display,
       id_column = "row",
       # row grouping
       render_html = dplyr::everything(),

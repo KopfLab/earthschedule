@@ -53,12 +53,15 @@ app_data_sheets <- function() {
 # @param access_level the access level the app starts with (see access_levels())
 # @param get_courses function returning the enrollment course summary for the
 #   stats tab (see module_stats_server()), NULL if not available
+# @param class_files_folder_id id of the google drive folder with the class
+#   files (see module_class_files_server()), NULL if not available
 app_server <- function(
   data_sheet_id,
   gs_key_file,
   access_level = "faculty",
   dev_cache_file = NULL,
-  get_courses = NULL
+  get_courses = NULL,
+  class_files_folder_id = NULL
 ) {
   function(input, output, session) {
     log_info("\n\n========================================================")
@@ -138,12 +141,23 @@ app_server <- function(
       dev_cache_file = dev_cache_file
     )
 
+    # class files module
+    class_files <- if (!is.null(class_files_folder_id)) {
+      module_class_files_server(
+        "class_files",
+        folder_id = class_files_folder_id,
+        gs_key_file = gs_key_file,
+        get_access_level = get_access_level
+      )
+    }
+
     # schedule module
     module_schedule_server(
       "schedule",
       data = data,
       get_access_level = get_access_level,
-      get_courses = get_courses
+      get_courses = get_courses,
+      class_files = class_files
     )
 
     # admin module

@@ -21,6 +21,14 @@ use_app_utils <- function() {
     tags$style(HTML(
       ".no-actions .bslib-sidebar-layout > .collapse-toggle {visibility: hidden;}"
     )) |>
+      singleton(),
+    # class file icons (dimmed if there are no files)
+    tags$style(HTML(
+      ".class-file-icons {margin-left: 0.5rem; white-space: nowrap;}
+      .class-file-icon {color: var(--bs-primary); margin-left: 0.35rem;}
+      .class-file-icon.no-files {color: inherit; opacity: 0.3;}
+      .class-file-icon:hover {opacity: 1;}"
+    )) |>
       singleton()
   )
 }

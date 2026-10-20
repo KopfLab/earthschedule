@@ -23,6 +23,15 @@
 #'   file with a `Detail` tab) for the Stats tab, set to `NULL` if not
 #'   available. The file is read once (when the Stats tab is first opened) and
 #'   shared by all sessions of the app.
+#' @param class_files_folder_id id of the Google Drive folder with the class
+#'   files, set to `NULL` if not available. The folder must have an
+#'   `advertisement` and a `syllabus` subfolder (created if missing) and the
+#'   service account needs edit access to it. Each file in the subfolders
+#'   starts with the course number of its class (e.g. `ERTH3181_syllabus.pdf`
+#'   or `ERTH4185_5185_syllabus.pdf` for the cross-listed ERTH4185/5185). The
+#'   schedule table shows icons next to each class to download these files,
+#'   and in faculty and admin mode to also upload (pdf, docx, pptx) and delete
+#'   them.
 #' @param dev_cache_file local xlsx file to cache the spreadsheet in developer
 #'   mode, set to `NULL` to never cache
 #' @param paths_app_url url of the ERTH paths app to link to in the navbar,
@@ -47,6 +56,7 @@ earthschedule_app <- function(
   access_level = c("faculty", "admin", "student"),
   start_tab = c("schedule", "rooms", "stats", "admin"),
   enrollment_data_file = NULL,
+  class_files_folder_id = NULL,
   dev_cache_file = "local_data_schedule.xlsx",
   paths_app_url = "https://apps.kopflab.org/earthpaths",
   options = list()
@@ -71,6 +81,9 @@ earthschedule_app <- function(
   ) {
     abort("`enrollment_data_file` must be the path to an existing file")
   }
+  if (!is.null(class_files_folder_id) && !is_scalar_character(class_files_folder_id)) {
+    abort("`class_files_folder_id` must be the id of the google drive folder")
+  }
   access_level <- arg_match(access_level)
   start_tab <- arg_match(start_tab)
   if (start_tab == "admin" && access_level != "admin") {
@@ -90,7 +103,8 @@ earthschedule_app <- function(
       dev_cache_file = dev_cache_file,
       get_courses = if (!is.null(enrollment_data_file)) {
         cache_enrollment_data(enrollment_data_file)
-      }
+      },
+      class_files_folder_id = class_files_folder_id
     ),
     options = options
   )

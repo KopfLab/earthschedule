@@ -10,6 +10,7 @@ earthschedule_app(
   access_level = c("faculty", "admin", "student"),
   start_tab = c("schedule", "rooms", "stats", "admin"),
   enrollment_data_file = NULL,
+  class_files_folder_id = NULL,
   dev_cache_file = "local_data_schedule.xlsx",
   paths_app_url = "https://apps.kopflab.org/earthpaths",
   options = list()
@@ -33,6 +34,16 @@ instructor, and \code{"student"} can only view (and download) the schedule}
 file with a \code{Detail} tab) for the Stats tab, set to \code{NULL} if not
 available. The file is read once (when the Stats tab is first opened) and
 shared by all sessions of the app.}
+
+\item{class_files_folder_id}{id of the Google Drive folder with the class
+files, set to \code{NULL} if not available. The folder must have an
+\code{advertisement} and a \code{syllabus} subfolder (created if missing) and the
+service account needs edit access to it. Each file in the subfolders
+starts with the course number of its class (e.g. \code{ERTH3181_syllabus.pdf}
+or \code{ERTH4185_5185_syllabus.pdf} for the cross-listed ERTH4185/5185). The
+schedule table shows icons next to each class to download these files,
+and in faculty and admin mode to also upload (pdf, docx, pptx) and delete
+them.}
 
 \item{dev_cache_file}{local xlsx file to cache the spreadsheet in developer
 mode, set to \code{NULL} to never cache}
