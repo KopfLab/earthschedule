@@ -23,7 +23,8 @@ module_class_files_server <- function(
       class = NULL,
       folder = NULL,
       delete_id = NULL,
-      uploads = NULL
+      uploads = NULL,
+      qrcode_class = NULL
     )
 
     # files can be uploaded and deleted by faculty and admins
@@ -94,7 +95,8 @@ module_class_files_server <- function(
     # the html of the class file icons for each of the classes (empty for
     # classes without a course number), icons are dimmed if there are no
     # files and not shown at all if there are no files and they can't be
-    # uploaded (student mode)
+    # uploaded (student mode), ERTH classes also get a QR code icon (between
+    # the advertisement and syllabus icons)
     get_icons <- function(classes) {
       req(values$files)
       classes <- as.character(classes)
@@ -102,6 +104,22 @@ module_class_files_server <- function(
       folders <- class_file_folders()
       folder_icons <- purrr::map_chr(class_file_icons(), \(x) as.character(icon(x)))
       modify <- can_modify()
+      # link that sets an input (to the class and folder)
+      make_link <- function(input_id, value, title, icon_html, class = "") {
+        sprintf(
+          paste0(
+            "<a href=\"#\" class=\"class-file-icon%s\" title=\"%s\" ",
+            "onclick=\"event.preventDefault(); event.stopPropagation(); ",
+            "Shiny.setInputValue('%s', %s, {priority: 'event'});\" ",
+            "ondblclick=\"event.stopPropagation();\">%s</a>"
+          ),
+          class,
+          title,
+          ns(input_id),
+          value,
+          icon_html
+        )
+      }
       # (only the unique classes)
       icons <- purrr::map_chr(
         unique(classes),
@@ -110,30 +128,37 @@ module_class_files_server <- function(
           if (is.na(prefix)) {
             return("")
           }
-          purrr::map_chr(folders, function(folder) {
+          # (only safe characters for the javascript)
+          safe_class <- stringr::str_remove_all(class, "[^A-Za-z0-9/ _-]")
+          links <- purrr::map_chr(folders, function(folder) {
             n <- counts$n[counts$folder == folder & counts$prefix == prefix]
             n <- if (length(n) > 0) n[1] else 0L
             if (n == 0 && !modify) {
               return("")
             }
-            sprintf(
-              paste0(
-                "<a href=\"#\" class=\"class-file-icon%s\" title=\"%s: %s\" ",
-                "onclick=\"event.preventDefault(); event.stopPropagation(); ",
-                "Shiny.setInputValue('%s', {class: '%s', folder: '%s'}, ",
-                "{priority: 'event'});\" ",
-                "ondblclick=\"event.stopPropagation();\">%s</a>"
+            make_link(
+              "open",
+              sprintf("{class: '%s', folder: '%s'}", safe_class, folder),
+              sprintf(
+                "%s: %s",
+                names(folders)[folders == folder],
+                if (n == 1) "1 file" else sprintf("%d files", n)
               ),
-              if (n == 0) " no-files" else "",
-              names(folders)[folders == folder],
-              if (n == 1) "1 file" else sprintf("%d files", n),
-              ns("open"),
-              # (only safe characters for the javascript)
-              stringr::str_remove_all(class, "[^A-Za-z0-9/ _-]"),
-              folder,
-              folder_icons[folder]
+              folder_icons[folder],
+              class = if (n == 0) " no-files" else ""
             )
-          }) |>
+          })
+          qrcode <- if (has_class_qrcode(class)) {
+            make_link(
+              "qrcode",
+              sprintf("'%s'", safe_class),
+              "QR code",
+              as.character(icon("qrcode"))
+            )
+          } else {
+            ""
+          }
+          c(links[1], qrcode, links[-1]) |>
             paste(collapse = "") |>
             (\(x) if (nchar(x) > 0) {
               sprintf("<span class=\"class-file-icons\">%s</span>", x)
@@ -144,6 +169,64 @@ module_class_files_server <- function(
       )
       icons[match(classes, unique(classes))]
     }
+
+    # QR code =====
+
+    # show the QR code of a class (with download buttons)
+    observeEvent(input$qrcode, {
+      req(has_class_qrcode(input$qrcode))
+      log_info(ns = ns, "showing the QR code for ", input$qrcode)
+      svg <- tryCatch(create_class_qrcode(input$qrcode), error = function(e) {
+        log_error(
+          ns = ns,
+          "failed to create the QR code",
+          user_msg = sprintf("Could not create the QR code for %s", input$qrcode),
+          error = e
+        )
+        NULL
+      })
+      req(svg)
+      values$qrcode_class <- input$qrcode
+      url <- get_class_search_url(input$qrcode)
+      showModal(modalDialog(
+        title = sprintf("%s: QR code", input$qrcode),
+        easyClose = TRUE,
+        tags$img(
+          src = paste0(
+            "data:image/svg+xml;charset=utf-8,",
+            utils::URLencode(svg, reserved = TRUE)
+          ),
+          alt = sprintf("QR code for %s", input$qrcode),
+          class = "d-block mx-auto",
+          style = "width: 100%; max-width: 400px;"
+        ),
+        p(
+          class = "text-muted small mt-2 mb-0 text-center",
+          "Links to ",
+          tags$a(href = url, target = "_blank", url)
+        ),
+        footer = tagList(
+          downloadButton(ns("qrcode_png"), "PNG"),
+          downloadButton(ns("qrcode_svg"), "SVG"),
+          modalButton("Close")
+        )
+      ))
+    })
+
+    # download the QR code
+    download_qrcode <- function(ext) {
+      downloadHandler(
+        filename = function() {
+          paste0(get_class_qrcode_name(values$qrcode_class), ".", ext)
+        },
+        content = function(file) {
+          log_info(ns = ns, "downloading the QR code for ", values$qrcode_class)
+          create_class_qrcode(values$qrcode_class, file)
+        }
+      )
+    }
+    output$qrcode_png <- download_qrcode("png")
+    output$qrcode_svg <- download_qrcode("svg")
 
     # dialog =====
 

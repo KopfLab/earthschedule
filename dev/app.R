@@ -14,5 +14,5 @@ earthschedule_app(
   dev_cache_file = "local_data_schedule.xlsx",
   options = list(port = 4444),
   access_level = "admin",
-  start_tab = "admin"
+  start_tab = "schedule"
 )
