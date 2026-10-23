@@ -668,8 +668,17 @@ module_selector_table_server <- function(
       values$all_ids
     })
 
+    # (errors in the data are reported when rendering the table, here they
+    # just mean there is no data so the observers below don't fail)
     has_data <- reactive({
-      return(!is.null(get_data()) && nrow(get_data()) > 0L)
+      data <- tryCatch(get_data(), error = function(e) {
+        if (inherits(e, "shiny.silent.error")) {
+          stop(e)
+        }
+        log_debug(ns = ns, "data not available: ", conditionMessage(e))
+        NULL
+      })
+      return(!is.null(data) && nrow(data) > 0L)
     })
 
     external_has_data <- reactive({

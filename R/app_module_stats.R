@@ -214,7 +214,13 @@ module_stats_server <- function(
       click <- input$plot_click
       p <- get_plot()
       params <- get_params()
-      bar <- sch_find_bar(p, click$x, click$y, value = click$panelvar1)
+      bar <- tryCatch(
+        sch_find_bar(p, click$x, click$y, value = click$panelvar1),
+        error = function(e) {
+          log_debug(ns = ns, "could not find the clicked bar: ", conditionMessage(e))
+          NULL
+        }
+      )
       if (is.null(bar)) {
         return()
       }

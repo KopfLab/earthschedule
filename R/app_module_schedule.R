@@ -48,7 +48,11 @@ module_schedule_server <- function(
         data$schedule$get_data(),
         "something went wrong retrieving the data"
       ))
-      get_available_terms(first_term = data$schedule$get_data()$term[1])
+      # (first valid term in the schedule)
+      terms <- data$schedule$get_data()$term
+      first_term <- terms[check_terms(terms) %in% TRUE][1]
+      validate(need(!is.na(first_term), "the schedule has no valid terms"))
+      get_available_terms(first_term = first_term)
     })
 
     # monitor terms
@@ -582,17 +586,49 @@ module_schedule_server <- function(
       log_info(ns = ns, "showing enrollment stats for ", class)
       values$stats_class <- class
 
-      # the classes in the enrollment data (incl. cross-listed course numbers)
-      courses <- get_stats_courses()
-      values$stats_classes <- if (!is.null(courses)) {
-        sch_find_classes(courses, class)
-      }
+      # loading message (shown right away, reading the enrollment data and
+      # finding the class can take a moment)
+      showModal(modalDialog(
+        title = class,
+        footer = NULL,
+        div(
+          class = "d-flex align-items-center gap-2 text-muted",
+          span(class = "spinner-border spinner-border-sm", role = "status"),
+          "Loading the enrollment stats..."
+        )
+      ))
 
-      # title: all course codes and most recent title of the class(es)
-      values$stats_title <- if (length(values$stats_classes) > 0) {
-        labels <- sch_label_classes(courses)
-        labels$label[labels$code %in% values$stats_classes] |>
-          paste(collapse = " & ")
+      # the classes in the enrollment data (incl. cross-listed course numbers)
+      # and the title: all course codes and most recent title of the class(es)
+      # (if the data could not be read, the error is already shown)
+      courses <- get_stats_courses()
+      req(courses)
+      found <- tryCatch(
+        {
+          classes <- sch_find_classes(courses, class)
+          labels <- if (length(classes) > 0) sch_label_classes(courses)
+          list(
+            classes = classes,
+            title = labels$label[labels$code %in% classes] |>
+              paste(collapse = " & ")
+          )
+        },
+        error = function(e) {
+          log_error(
+            ns = ns,
+            "failed to find ",
+            class,
+            " in the enrollment data",
+            user_msg = "Could not load the enrollment stats",
+            error = e
+          )
+          NULL
+        }
+      )
+      req(found)
+      values$stats_classes <- found$classes
+      values$stats_title <- if (length(found$classes) > 0) {
+        found$title
       } else {
         paste(class, get_classes()$title[get_classes()$class == class][1])
       }
@@ -773,14 +809,24 @@ module_schedule_server <- function(
 
     # store the information of the selected cell (whether it can be modified
     # is checked when an action button is pressed, see check_edit())
+    # (clicks on the class group rows report NA cells and are ignored)
     observeEvent(schedule_table$get_selected_cells(), {
+      selected_ids <- schedule_table$get_selected_ids()
+      selected_term <- as.character(schedule_table$get_selected_cells())
+      selected_items <- if (
+        length(selected_ids) == 1L &&
+          !is.na(selected_ids) &&
+          length(selected_term) == 1L &&
+          isTRUE(check_terms(selected_term))
+      ) {
+        schedule_table$get_selected_items()
+      }
       if (
-        !rlang::is_empty(schedule_table$get_selected_ids()) &&
-          check_terms(as.character(schedule_table$get_selected_cells()))
+        !is.null(selected_items) &&
+          nrow(selected_items) == 1L &&
+          selected_term %in% names(selected_items)
       ) {
         log_debug(ns = ns, "new cell selected")
-        selected_items <- schedule_table$get_selected_items()
-        selected_term <- as.character(schedule_table$get_selected_cells())
         values$edit <- list(
           instructor_id = selected_items$instructor_id,
           instructor = selected_items$Instructor,
@@ -807,7 +853,10 @@ module_schedule_server <- function(
     # @param action one of add_class, edit_class, delete_class, toggle_lock, add_leave, delete_leave
     check_edit <- function(action) {
       edit <- values$edit
-      has_cell <- length(edit) > 0
+      has_cell <- length(edit) > 0 &&
+        rlang::is_string(edit$term) &&
+        rlang::is_string(edit$info) &&
+        !is.na(edit$info)
       is_future <- has_cell && is_term_after(edit$term)
       is_own <- has_cell && can_edit_instructor(edit$instructor_id)
       is_leave <- has_cell && edit$info %in% get_reasons()

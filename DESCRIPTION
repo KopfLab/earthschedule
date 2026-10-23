@@ -37,7 +37,7 @@ Imports:
     rlang (>= 1.1.0),
     rlog,
     scales,
-    shiny,
+    shiny (>= 1.8.1),
     shinycssloaders,
     shinyjs,
     stats,

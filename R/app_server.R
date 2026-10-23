@@ -73,6 +73,18 @@ app_server <- function(
       "'"
     )
 
+    # log errors that end the session (uncaught errors in observers) so the
+    # cause shows up in the server log
+    shiny::onUnhandledError(function(e) {
+      rlog::log_fatal(paste0(
+        "session ended by an unhandled error: ",
+        conditionMessage(e),
+        if (!is.null(conditionCall(e))) {
+          paste0(" (in ", paste(deparse(conditionCall(e)), collapse = " "), ")")
+        }
+      ))
+    })
+
     # access level (can only change in dev mode)
     get_access_level <- reactiveVal(access_level)
     observeEvent(input$dev_access_level, {
