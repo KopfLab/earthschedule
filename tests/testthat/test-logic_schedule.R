@@ -32,9 +32,32 @@ test_that("data preparation works", {
 
 test_that("rooms and teaching times are extracted", {
   expect_equal(prepare_rooms(test_schedule()), "BESC 180")
+  # always includes the standard meeting times
+  standard <- prepare_teaching_times(test_schedule())
+  expect_length(standard, 17L)
   expect_equal(
-    prepare_teaching_times(test_schedule()),
-    c("MWF: 9:00a-9:50a", "TTH: 11:00a-12:15p")
+    head(standard, 2),
+    c(
+      "MWF: 8:00a-8:50a (150 min/week)" = "MWF: 8:00a-8:50a",
+      "MWF: 9:05a-9:55a (150 min/week)" = "MWF: 9:05a-9:55a"
+    )
+  )
+  # MWF 9:00a is not a standard start time
+  expect_false("MWF: 9:00a-9:50a" %in% standard)
+  expect_true("TTH: 11:00a-12:15p (150 min/week)" %in% names(standard))
+  times <- tibble::tibble(
+    days = c("mw", "TTH", "TH", "TTH", "M-F", "MTH", NA),
+    start_time = c("3:35p", "11a", "5p", "11:00a", "8:00a", "8a", "8a"),
+    end_time = c("4:50p", "12:20p", "7:30p", "12:20p", "5:00p", "9a", "9a")
+  )
+  extra <- prepare_teaching_times(times)
+  expect_equal(
+    extra[!extra %in% standard],
+    c(
+      "TTH: 11:00a-12:20p (160 min/week)" = "TTH: 11:00a-12:20p",
+      "MW: 3:35p-4:50p (150 min/week)" = "MW: 3:35p-4:50p",
+      "TH: 5:00p-7:30p (150 min/week)" = "TH: 5:00p-7:30p"
+    )
   )
 })
 

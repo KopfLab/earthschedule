@@ -1288,7 +1288,7 @@ module_schedule_server <- function(
               ns("room_id"),
               "Do you have a preferred classroom?",
               multiple = FALSE,
-              choices = c("No preference" = "", get_rooms()) |>
+              choices = c("Same as last time" = "", get_rooms()) |>
                 with_value(prefill$room_id),
               selected = prefill$room_id
             ),
@@ -1296,7 +1296,7 @@ module_schedule_server <- function(
               ns("timeslot"),
               "Do you have a preferred timeslot?",
               multiple = FALSE,
-              choices = c("No preference" = "", get_teaching_times()) |>
+              choices = c("Same as last time" = "", get_teaching_times()) |>
                 with_value(prefill$timeslot),
               selected = prefill$timeslot
             )

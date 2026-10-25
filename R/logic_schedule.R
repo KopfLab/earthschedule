@@ -86,29 +86,128 @@ prepare_rooms <- function(schedule) {
     sort()
 }
 
+# parse times like "9:05a", "9a", "12:15p" into minutes since midnight
+parse_time_to_minutes <- function(x) {
+  parts <- stringr::str_match(
+    stringr::str_to_lower(stringr::str_trim(x)),
+    "^(\\d{1,2})(?::(\\d{2}))?\\s*([ap])m?$"
+  )
+  hour <- as.integer(parts[, 2]) %% 12L + ifelse(parts[, 4] == "p", 12L, 0L)
+  minute <- ifelse(is.na(parts[, 3]), 0L, as.integer(parts[, 3]))
+  hour * 60L + minute
+}
+
+# format minutes since midnight as times like "9:05a" or "12:15p"
+format_minutes_as_time <- function(x) {
+  hour <- (x %/% 60L - 1L) %% 12L + 1L
+  sprintf("%d:%02d%s", hour, x %% 60L, ifelse(x %/% 60L >= 12L, "p", "a"))
+}
+
+# standard meeting times
+standard_meeting_times <- tibble::tribble(
+  ~days, ~start_time, ~end_time,
+  "MWF", "8:00a", "8:50a",
+  "MWF", "9:05a", "9:55a",
+  "MWF", "10:10a", "11:00a",
+  "MWF", "11:15a", "12:05p",
+  "MWF", "12:20p", "1:10p",
+  "MWF", "1:25p", "2:15p",
+  "MWF", "2:30p", "3:20p",
+  "MWF", "3:35p", "4:25p",
+  "MWF", "4:40p", "5:30p",
+  "MWF", "5:45p", "6:35p",
+  "TTH", "8:00a", "9:15a",
+  "TTH", "9:30a", "10:45a",
+  "TTH", "11:00a", "12:15p",
+  "TTH", "12:30p", "1:45p",
+  "TTH", "2:00p", "3:15p",
+  "TTH", "3:30p", "4:45p",
+  "TTH", "5:00p", "6:15p"
+)
+
+# standard meeting start times (in minutes since midnight)
+standard_start_times <- standard_meeting_times |>
+  split(~days) |>
+  lapply(function(x) parse_time_to_minutes(x$start_time))
+
+# split day patterns like "MWF" or "TTH" into individual days
+# (ranges like "M-F" are not resolved)
+split_days <- function(days) {
+  stringr::str_extract_all(stringr::str_to_upper(days), "TH|M|T|W|F")
+}
+
+# standard meeting times and teaching times that start at a standard meeting
+# time, labeled with their total minutes per week (the labels are the names,
+# the values the timeslots)
 prepare_teaching_times <- function(schedule) {
   schedule |>
     dplyr::select("days", "start_time", "end_time") |>
-    dplyr::distinct() |>
+    dplyr::bind_rows(standard_meeting_times) |>
     dplyr::filter(
       !is.na(.data$days),
       !is.na(.data$start_time),
       !is.na(.data$end_time)
     ) |>
     dplyr::mutate(
-      days = factor(stringr::str_to_upper(.data$days)),
+      days = stringr::str_to_upper(stringr::str_trim(.data$days)),
+      start_time = stringr::str_trim(.data$start_time),
+      end_time = stringr::str_trim(.data$end_time)
+    ) |>
+    dplyr::distinct() |>
+    dplyr::mutate(
+      day_list = split_days(.data$days),
+      n_days = lengths(.data$day_list),
+      # which standard schedule the days belong to (NA for ranges and mixes)
+      standard = purrr::map_chr(.data$day_list, function(d) {
+        if (length(d) > 0 && all(d %in% c("M", "W", "F"))) {
+          "MWF"
+        } else if (length(d) > 0 && all(d %in% c("T", "TH"))) {
+          "TTH"
+        } else {
+          NA_character_
+        }
+      }),
+      start = parse_time_to_minutes(.data$start_time),
+      end = parse_time_to_minutes(.data$end_time)
+    ) |>
+    dplyr::filter(
+      !stringr::str_detect(.data$days, "-"),
+      !is.na(.data$standard),
+      !is.na(.data$start),
+      !is.na(.data$end),
+      .data$end > .data$start
+    ) |>
+    dplyr::filter(
+      purrr::map2_lgl(
+        .data$standard,
+        .data$start,
+        ~ .y %in% standard_start_times[[.x]]
+      )
+    ) |>
+    dplyr::mutate(
+      days = factor(.data$days),
       # sort the most common day patterns first (if they exist)
       days = forcats::fct_relevel(
         .data$days,
         intersect(c("MWF", "TTH", "MW", "WF"), levels(.data$days))
       ),
-      time = as.POSIXct(paste0(.data$start_time, "m"), format = "%I:%M%p")
+      value = sprintf(
+        "%s: %s-%s",
+        .data$days,
+        format_minutes_as_time(.data$start),
+        format_minutes_as_time(.data$end)
+      ),
+      duration = .data$end - .data$start,
+      label = sprintf(
+        "%s (%d min/week)",
+        .data$value,
+        .data$duration * .data$n_days
+      )
     ) |>
-    dplyr::arrange(.data$days, .data$time) |>
-    dplyr::mutate(
-      label = sprintf("%s: %s-%s", .data$days, .data$start_time, .data$end_time)
-    ) |>
-    dplyr::pull("label")
+    dplyr::arrange(.data$days, .data$start, .data$end) |>
+    dplyr::filter(!duplicated(.data$value)) |>
+    dplyr::select("label", "value") |>
+    tibble::deframe()
 }
 
 # FIXME: timezone hardcoded for this application
