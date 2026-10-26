@@ -587,20 +587,20 @@ module_schedule_server <- function(
       log_info(ns = ns, "showing enrollment stats for ", class)
       values$stats_class <- class
 
-      # loading message (shown right away, reading the enrollment data and
-      # finding the class can take a moment), removed again if the stats
-      # dialog is not shown (e.g. because the data could not be read)
-      showModal(modalDialog(
-        title = class,
-        footer = modalButton("Cancel"),
+      # loading toast (shown right away, reading the enrollment data and
+      # finding the class can take a moment), hidden again once done
+      loading_toast <- bslib::toast(
         div(
-          class = "d-flex align-items-center gap-2 text-muted",
+          class = "d-flex align-items-center gap-2",
           span(class = "spinner-border spinner-border-sm", role = "status"),
-          "Loading the enrollment stats..."
-        )
-      ))
-      stats_shown <- FALSE
-      on.exit(if (!stats_shown) removeModal(), add = TRUE)
+          sprintf("Loading the enrollment stats for %s...", class)
+        ),
+        type = "info",
+        duration_s = NA,
+        position = "bottom-right"
+      ) |>
+        bslib::show_toast()
+      on.exit(bslib::hide_toast(loading_toast), add = TRUE)
 
       # the classes in the enrollment data (incl. cross-listed course numbers)
       # and the title: all course codes and most recent title of the class(es)
@@ -637,7 +637,6 @@ module_schedule_server <- function(
         paste(class, get_classes()$title[get_classes()$class == class][1])
       }
       showModal(get_stats_dialog())
-      stats_shown <- TRUE
     })
 
     # the class stats dialog
