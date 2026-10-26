@@ -550,8 +550,9 @@ module_schedule_server <- function(
 
     # class stats dialog ======
 
-    # enrollment data (NULL if not available)
-    get_stats_courses <- reactive({
+    # enrollment data (NULL if not available), not a reactive so a failure
+    # is reported (and reading retried) every time
+    get_stats_courses <- function() {
       req(!is.null(get_courses))
       tryCatch(get_courses(), error = function(e) {
         log_error(
@@ -562,7 +563,7 @@ module_schedule_server <- function(
         )
         NULL
       })
-    })
+    }
 
     # the last 7 years (14 semesters) of the enrollment data
     stats_n_semesters <- 14
@@ -587,16 +588,19 @@ module_schedule_server <- function(
       values$stats_class <- class
 
       # loading message (shown right away, reading the enrollment data and
-      # finding the class can take a moment)
+      # finding the class can take a moment), removed again if the stats
+      # dialog is not shown (e.g. because the data could not be read)
       showModal(modalDialog(
         title = class,
-        footer = NULL,
+        footer = modalButton("Cancel"),
         div(
           class = "d-flex align-items-center gap-2 text-muted",
           span(class = "spinner-border spinner-border-sm", role = "status"),
           "Loading the enrollment stats..."
         )
       ))
+      stats_shown <- FALSE
+      on.exit(if (!stats_shown) removeModal(), add = TRUE)
 
       # the classes in the enrollment data (incl. cross-listed course numbers)
       # and the title: all course codes and most recent title of the class(es)
@@ -633,6 +637,7 @@ module_schedule_server <- function(
         paste(class, get_classes()$title[get_classes()$class == class][1])
       }
       showModal(get_stats_dialog())
+      stats_shown <- TRUE
     })
 
     # the class stats dialog
