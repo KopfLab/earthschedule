@@ -22,7 +22,9 @@
 #' @param enrollment_data_file path to the enrollment & SCH data export (xlsx
 #'   file with a `Detail` tab) for the Stats tab, set to `NULL` if not
 #'   available. The file is read once (when the Stats tab is first opened) and
-#'   shared by all sessions of the app.
+#'   shared by all sessions of the app. Can also be the `.rds` cache file that
+#'   the app writes next to the xlsx file when reading it (e.g. to deploy the
+#'   app without the xlsx file).
 #' @param class_files_folder_id id of the Google Drive folder with the class
 #'   files, set to `NULL` if not available. The folder must have an
 #'   `advertisement` and a `syllabus` subfolder (created if missing) and the
@@ -127,9 +129,32 @@ cache_enrollment_data <- function(file) {
 }
 
 # read the enrollment data from the .rds cache (if up to date) or the data file
-# @param file path to the enrollment & SCH data export
+# @param file path to the enrollment & SCH data export or directly to an .rds
+#   cache file (which is then used as is, recognized by its contents rather
+#   than its extension)
 # @return the course summary (see sch_read_courses())
 read_enrollment_data_cached <- function(file) {
+  # cache file passed in directly (anything that is not an excel file)
+  if (is.na(readxl::format_from_signature(file))) {
+    log_info("reading enrollment data from cache file '", basename(file), "'")
+    cache <- tryCatch(readRDS(file), error = function(e) NULL)
+    if (!is.list(cache) || !is.data.frame(cache$courses)) {
+      abort(sprintf(
+        "'%s' is neither an excel file nor an enrollment data cache (.rds) file",
+        basename(file)
+      ))
+    }
+    if (!identical(cache$key$processing, get_enrollment_processing_key())) {
+      log_warning(
+        "the enrollment data cache file '",
+        basename(file),
+        "' was created with different processing functions, ",
+        "re-create it from the data file if the Stats are not as expected"
+      )
+    }
+    return(cache$courses)
+  }
+
   cache_file <- paste0(tools::file_path_sans_ext(file), ".rds")
   key <- get_enrollment_cache_key(file)
 
@@ -163,17 +188,23 @@ read_enrollment_data_cached <- function(file) {
 }
 
 # cache key of the enrollment data: hash of the data file contents and of the
-# processing functions (all sch_ objects of the package)
+# processing functions (see get_enrollment_processing_key())
 # @param file path to the enrollment & SCH data export
 get_enrollment_cache_key <- function(file) {
+  list(
+    file = rlang::hash_file(file),
+    processing = get_enrollment_processing_key()
+  )
+}
+
+# hash of the enrollment data processing functions (all sch_ objects of the
+# package)
+get_enrollment_processing_key <- function() {
   ns <- asNamespace("earthschedule")
   objects <- sort(ls(ns, pattern = "^sch_"))
   processing <- lapply(objects, \(x) {
     obj <- get(x, envir = ns)
     if (is.function(obj)) deparse(body(obj)) else obj
   })
-  list(
-    file = rlang::hash_file(file),
-    processing = rlang::hash(processing)
-  )
+  rlang::hash(processing)
 }

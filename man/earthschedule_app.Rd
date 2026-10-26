@@ -33,7 +33,9 @@ instructor, and \code{"student"} can only view (and download) the schedule}
 \item{enrollment_data_file}{path to the enrollment & SCH data export (xlsx
 file with a \code{Detail} tab) for the Stats tab, set to \code{NULL} if not
 available. The file is read once (when the Stats tab is first opened) and
-shared by all sessions of the app.}
+shared by all sessions of the app. Can also be the \code{.rds} cache file that
+the app writes next to the xlsx file when reading it (e.g. to deploy the
+app without the xlsx file).}
 
 \item{class_files_folder_id}{id of the Google Drive folder with the class
 files, set to \code{NULL} if not available. The folder must have an
