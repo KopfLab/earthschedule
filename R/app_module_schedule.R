@@ -565,11 +565,8 @@ module_schedule_server <- function(
       })
     }
 
-    # the last 7 years (14 semesters) of the enrollment data
-    stats_n_semesters <- 14
-
     # double-clicking a class (group row) shows its enrollment, SCH and TA
-    # equivalents per semester for the last semesters of the enrollment data
+    # equivalents per semester (same semesters as the stats tab default)
     # (if grouped by class and the stats are available at this access level)
     observeEvent(schedule_table$get_group_dblclick(), {
       req(
@@ -697,18 +694,26 @@ module_schedule_server <- function(
       req(values$stats_class)
       courses <- get_stats_courses()
       req(courses)
-      terms <- utils::tail(sch_get_semesters(courses), stats_n_semesters)
+      # same semesters as the default of the stats tab (from sch_default_from
+      # to the most recent semester)
+      terms <- sch_get_semesters(courses)
+      if (sch_default_from %in% terms) {
+        terms <- terms[seq(match(sch_default_from, terms), length(terms))]
+      }
       # (only the classes with data in these terms)
       in_terms <- sch_filter_courses(
         courses,
         include_summer = FALSE,
         include_grad = TRUE,
-        include_grad_field = TRUE,
         from = terms[1],
         to = utils::tail(terms, 1)
       )
-      classes <- values$stats_classes
-      classes <- classes[stringr::str_sub(classes, 5) %in% in_terms$Class]
+      classes <- purrr::keep(values$stats_classes, \(class) {
+        tryCatch(
+          nrow(sch_select_classes(in_terms, class)) > 0,
+          error = function(e) FALSE
+        )
+      })
       validate(need(
         length(classes) > 0,
         sprintf(
@@ -730,7 +735,6 @@ module_schedule_server <- function(
         from = terms[1],
         to = utils::tail(terms, 1),
         include_grad = TRUE,
-        include_grad_field = TRUE,
         base_size = 13
       ) +
         ggplot2::labs(subtitle = NULL) +

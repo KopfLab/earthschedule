@@ -4,11 +4,28 @@
 
 # constants =====
 
-# SCH categories by section activity type, all other types (DIS, THE, IND, OTH)
-# are 100% other SCH. LEC sections of classes that also have LAB sections are
-# recoded as LEC+LAB and get 1 lab credit hour per enrolled student.
-sch_lecture_types <- c("LEC", "REC", "SEM") # 100% lecture SCH
-sch_lab_types <- c("MLS", "LAB", "FLD") # 100% lab SCH
+# lecture SCH (simplified, reproduces the official numbers): all SCH of the
+# undergraduate sponsoring sections (Sponsor = 1 and GRAD_UG = UG, SP_SCH incl.
+# all cross-listed enrollment, i.e. also the graduate students in UG sponsored
+# classes, graduate sponsored classes never have lecture SCH) whose primary
+# instructor is in one of the sch_inst_depts with one of these
+# activity types (i.e. incl. the SCH of lab sections, but no dissertations,
+# theses, independent studies or practica)
+sch_lecture_sch_types <- c("LEC", "REC", "LAB", "MLS", "FLD", "SEM", "OTH")
+sch_inst_depts <- "GEOL"
+
+# lab SCH: SCH of undergraduate sponsored lab sections (MLS, LAB, FLD). LEC sections of classes that
+# also have LAB sections are recoded as LEC+LAB and get 1 lab credit hour per
+# enrolled student. Lecture enrollment is the enrollment of the other sections
+# (LEC, REC, SEM, LEC+LAB).
+sch_lecture_types <- c("LEC", "REC", "SEM")
+sch_lab_types <- c("MLS", "LAB", "FLD")
+
+# the department's sponsoring subjects
+sch_subjects <- c("GEOL", "ERTH")
+
+# default first semester of the summaries and plots (stats tab and class stats)
+sch_default_from <- "Fall 2021"
 
 # SCH per TA equivalent
 sch_per_ta_lecture <- 360
@@ -24,18 +41,27 @@ sch_semester_codes <- c(Spring = 1L, Summer = 4L, Fall = 7L)
 
 # read the enrollment data
 # reads the Detail tab of the enrollment & SCH data export (header in row 14)
-# and keeps only the sections sponsored by one of the `subjects`. Note that
-# the file has two sets of SECTIONS/Enrl columns: the 1st set pairs with SP_SCH
-# (credited to the sponsoring section, incl. all cross-listed enrollment), the
-# 2nd with Ch_SCH.
+# and keeps the sections sponsored by one of the `subjects` plus the sections
+# sponsored by other departments whose sponsoring section's primary instructor
+# is in one of the `inst_depts` (e.g. ASTR2040 taught by GEOL faculty), both
+# incl. their cross-listed sections. Note that the file has two sets of
+# SECTIONS/Enrl columns: the 1st set pairs with SP_SCH (credited to the
+# sponsoring section, incl. all cross-listed enrollment), the 2nd with Ch_SCH.
 # @param file path to the excel file
 # @param subjects the sponsoring subjects to keep
+# @param inst_depts the instructor departments (InstDept1) whose sections
+#   sponsored by other departments are kept as well
 # @return data frame with one row per section plus Spnsr_Course (sponsoring
 #   course without the section number, e.g. GEOL4241), Course (the section's
-#   own, possibly cross-listed, course e.g. GEOG4241) and Has_TA (1 if the
+#   own, possibly cross-listed, course e.g. GEOG4241), sponsored (whether the
+#   section is sponsored by one of the `subjects`) and Has_TA (1 if the
 #   section has a TA). If the file has no Has_TA column, it is derived from
 #   the instructor job titles (any of JobTitle1-4 is one of sch_ta_job_titles).
-sch_read_data <- function(file, subjects = c("GEOL", "ERTH")) {
+sch_read_data <- function(
+  file,
+  subjects = sch_subjects,
+  inst_depts = sch_inst_depts
+) {
   data <- readxl::read_excel(
     file,
     sheet = "Detail",
@@ -44,7 +70,14 @@ sch_read_data <- function(file, subjects = c("GEOL", "ERTH")) {
     .name_repair = "minimal"
   ) |>
     dplyr::rename(SECTIONS = 17, Enrl = 18, Ch_SECTIONS = 20, Ch_Enrl = 21) |>
-    dplyr::filter(stringr::str_sub(.data$Spnsr_ID, 1, 4) %in% subjects) |>
+    dplyr::mutate(
+      sponsored = stringr::str_sub(.data$Spnsr_ID, 1, 4) %in% subjects
+    ) |>
+    dplyr::filter(
+      .data$sponsored |
+        any(.data$Sponsor == 1 & .data$InstDept1 %in% inst_depts),
+      .by = c("TERM", "Spnsr_ID")
+    ) |>
     dplyr::mutate(
       # extracted via pattern since a few sections have 4 characters (e.g. 430R)
       Spnsr_Course = stringr::str_extract(.data$Spnsr_ID, "^[A-Z]{4}[0-9]{4}"),
@@ -73,10 +106,14 @@ sch_read_data <- function(file, subjects = c("GEOL", "ERTH")) {
 # read the enrollment data and summarize the courses
 # @inheritParams sch_read_data
 # @return course summary from sch_summarize_courses()
-sch_read_courses <- function(file, subjects = c("GEOL", "ERTH")) {
-  data <- sch_read_data(file, subjects)
+sch_read_courses <- function(
+  file,
+  subjects = sch_subjects,
+  inst_depts = sch_inst_depts
+) {
+  data <- sch_read_data(file, subjects, inst_depts)
   data |>
-    sch_calculate_sections() |>
+    sch_calculate_sections(inst_depts) |>
     sch_summarize_courses() |>
     sch_add_section_info(data)
 }
@@ -186,14 +223,21 @@ sch_modernize_codes <- function(x) {
 
 # section and course SCH =====
 
-# split each section's SCH into lecture, lab and other SCH
-# the LAB sections of LEC+LAB classes carry no SCH (it's all recorded in the
-# LEC section) and are removed.
+# calculate each section's lecture and lab SCH
+# lecture SCH is the SCH of the undergraduate sponsoring sections (GRAD_UG =
+# UG, graduate sponsored sections have no lecture SCH) with a primary instructor
+# in one of the `inst_depts` and one of the sch_lecture_sch_types (incl. lab
+# sections, i.e. lab SCH is part of the lecture SCH). Lab SCH is the SCH of
+# lab sections plus 1 credit hour per student for LEC+LAB sections. The LAB
+# sections of LEC+LAB classes carry no SCH (it's all recorded in the LEC
+# section) and are removed. Graduate sponsored sections have neither lecture
+# nor lab SCH (graduate students in UG sponsored sections are included).
 # @param data sections from sch_read_data()
-# @return data frame of sections with lecture_sch, lab_sch, other_sch and
-#   has_ta (whether any section of the course has a TA, incl. the removed LAB
-#   sections)
-sch_calculate_sections <- function(data) {
+# @param inst_depts the instructor departments (InstDept1) whose SCH counts
+#   as lecture SCH
+# @return data frame of sections with lecture_sch, lab_sch and has_ta (whether
+#   any section of the course has a TA, incl. the removed LAB sections)
+sch_calculate_sections <- function(data, inst_depts = sch_inst_depts) {
   sections <- data |>
     dplyr::mutate(
       ACTVTYP = dplyr::if_else(
@@ -203,18 +247,27 @@ sch_calculate_sections <- function(data) {
       ),
       .by = c("TERM", "Spnsr_Course")
     ) |>
+    # whether the section is undergraduate sponsored (incl. its cross-listed
+    # graduate sections), graduate sponsored sections have no SCH
+    dplyr::mutate(
+      ug_sponsored = any(.data$Sponsor == 1 & .data$GRAD_UG == "UG"),
+      .by = c("TERM", "Spnsr_ID")
+    ) |>
     dplyr::mutate(
       lab_sch = dplyr::case_when(
+        !.data$ug_sponsored ~ 0,
         .data$ACTVTYP %in% sch_lab_types ~ .data$SP_SCH,
         .data$ACTVTYP == "LEC+LAB" ~ .data$Enrl,
         .default = 0
       ),
-      lecture_sch = dplyr::case_when(
-        .data$ACTVTYP %in% sch_lecture_types ~ .data$SP_SCH,
-        .data$ACTVTYP == "LEC+LAB" ~ .data$SP_SCH - .data$lab_sch,
-        .default = 0
+      lecture_sch = dplyr::if_else(
+        .data$Sponsor == 1 &
+          .data$ug_sponsored &
+          .data$InstDept1 %in% inst_depts &
+          .data$ACTVTYP %in% c(sch_lecture_sch_types, "LEC+LAB"),
+        .data$SP_SCH,
+        0
       ),
-      other_sch = .data$SP_SCH - .data$lecture_sch - .data$lab_sch,
       has_ta = any(.data$Has_TA == 1, na.rm = TRUE),
       is_leclab_lab = .data$ACTVTYP == "LAB" & any(.data$ACTVTYP == "LEC+LAB"),
       .by = c("TERM", "Spnsr_Course")
@@ -240,10 +293,31 @@ sch_combine_courses <- function(courses, sponsor) {
     paste(collapse = "/")
 }
 
+# the class of a course: the course number for courses sponsored by GEOL/ERTH
+# (consistent across the GEOL -> ERTH rename), for courses sponsored by other
+# departments the number of their (first) GEOL/ERTH cross-listed course (e.g.
+# "2040" for ASTR2040/ERTH2040, which is sometimes sponsored as ERTH2040) or
+# the full course code if they are not cross-listed (e.g. "FYSM1000")
+# @param sponsor the sponsoring course (e.g. "ASTR2040")
+# @param courses all course codes of the course (incl. the cross-listed ones)
+# @param sponsored whether the course is sponsored by GEOL/ERTH
+# @return the class (single string)
+sch_get_class <- function(sponsor, courses, sponsored) {
+  if (sponsored) {
+    return(stringr::str_sub(sponsor, 5))
+  }
+  cross_listed <- courses[stringr::str_sub(courses, 1, 4) %in% sch_subjects]
+  if (length(cross_listed) == 0) {
+    return(sponsor)
+  }
+  sort(unique(cross_listed))[1] |> stringr::str_sub(5)
+}
+
 # summarize the SCH of each course (combining cross-listed sections)
 # @param sections sections from sch_calculate_sections()
 # @return data frame with one row per term and sponsoring course incl. the
-#   course number (Class, consistent across the GEOL -> ERTH rename), the
+#   class (Class, see sch_get_class()), whether it is sponsored by GEOL/ERTH
+#   (sponsored), the
 #   combined (cross-listed) course codes and activity types, the UG/Grad level,
 #   enrollment, SCH, fiscal year (FY, e.g. FY24 = Summer 2023 + Fall 2023 +
 #   Spring 2024), the lecture and lab enrollment (lecture_enrl = students in
@@ -259,14 +333,22 @@ sch_summarize_courses <- function(sections) {
       sections = list(
         dplyr::pick(
           "Spnsr_ID",
+          "ACTVTYP",
           "Primary_Sub_Section",
           "Enrl",
+          "SP_SCH",
           "lecture_sch",
           "lab_sch"
         ) |>
           dplyr::rename(section = "Spnsr_ID") |>
           sch_summarize_sections()
       ),
+      Class = sch_get_class(
+        .data$Spnsr_Course[1],
+        .data$Course,
+        .data$sponsored[1]
+      ),
+      sponsored = .data$sponsored[1],
       Courses = sch_combine_courses(.data$Course, .data$Spnsr_Course[1]),
       ACTVTYP = unique(.data$ACTVTYP) |> sort() |> paste(collapse = "/"),
       # UG/Grad level of the sections that carry the SCH (i.e. the sponsoring
@@ -283,7 +365,7 @@ sch_summarize_courses <- function(sections) {
         na.rm = TRUE
       ),
       dplyr::across(
-        c("SP_SCH", "lecture_sch", "lab_sch", "other_sch"),
+        c("SP_SCH", "lecture_sch", "lab_sch"),
         \(x) sum(x, na.rm = TRUE)
       ),
       has_ta = any(.data$has_ta),
@@ -293,7 +375,6 @@ sch_summarize_courses <- function(sections) {
     dplyr::mutate(
       lecture_enrl = purrr::map_dbl(.data$sections, \(x) sum(x$lecture_enrl)),
       lab_enrl = purrr::map_dbl(.data$sections, \(x) sum(x$lab_enrl)),
-      Class = stringr::str_sub(.data$Spnsr_Course, 5),
       FY = sprintf("FY%02d", .data$FYC %% 100)
     ) |>
     dplyr::arrange(.data$Spnsr_Course, .data$YearTerm)
@@ -302,12 +383,16 @@ sch_summarize_courses <- function(sections) {
 # summarize the enrollment and SCH of each sponsoring section
 # cross-listed sections are combined with their sponsoring section, the
 # enrollment only counts primary sections (subsections such as REC enroll the
-# same students again and carry no SCH).
+# same students again and carry no SCH). The enrollment is counted for all
+# sections with SCH (also if their SCH does not count as lecture SCH because
+# the instructor is from another department), as lecture enrollment for
+# sections with SCH in lecture type sections (LEC, REC, SEM, LEC+LAB) or only
+# lecture SCH (e.g. OTH), and as lab enrollment for sections with only lab SCH
+# (lab sections, MLS, LAB, FLD, even if cross-listed with e.g. a SEM).
 # @param df sections of one course with section (the sponsoring section),
-#   Primary_Sub_Section, Enrl, lecture_sch and lab_sch
-# @return data frame with one row per section with lecture or lab SCH and the
-#   section's lecture_enrl (if it has lecture SCH, incl. LEC+LAB), lab_enrl
-#   (if it only has lab SCH), lecture_sch and lab_sch
+#   ACTVTYP, Primary_Sub_Section, Enrl, SP_SCH, lecture_sch and lab_sch
+# @return data frame with one row per section with enrollment, lecture or lab
+#   SCH and the section's lecture_enrl, lab_enrl, lecture_sch and lab_sch
 sch_summarize_sections <- function(df) {
   df |>
     dplyr::summarize(
@@ -315,13 +400,40 @@ sch_summarize_sections <- function(df) {
         .data$Enrl[.data$Primary_Sub_Section == "Primary Section"],
         na.rm = TRUE
       ),
-      dplyr::across(c("lecture_sch", "lab_sch"), \(x) sum(x, na.rm = TRUE)),
+      # (lecture type sections with SCH, e.g. not SEM cross-listings of FLD)
+      is_lecture = any(
+        .data$ACTVTYP %in% c(sch_lecture_types, "LEC+LAB") & .data$SP_SCH > 0,
+        na.rm = TRUE
+      ),
+      # (lab type sections with SCH, also if it does not count as lab SCH,
+      # e.g. graduate field classes)
+      is_lab = any(
+        .data$ACTVTYP %in% sch_lab_types & .data$SP_SCH > 0,
+        na.rm = TRUE
+      ),
+      dplyr::across(
+        c("lecture_sch", "lab_sch"),
+        \(x) sum(x, na.rm = TRUE)
+      ),
       .by = "section"
     ) |>
-    dplyr::filter(.data$lecture_sch > 0 | .data$lab_sch > 0) |>
     dplyr::mutate(
-      lecture_enrl = dplyr::if_else(.data$lecture_sch > 0, .data$enrl, 0),
-      lab_enrl = dplyr::if_else(.data$lecture_sch == 0, .data$enrl, 0)
+      lab_enrl = dplyr::if_else(
+        !.data$is_lecture & (.data$is_lab | .data$lab_sch > 0),
+        .data$enrl,
+        0
+      ),
+      lecture_enrl = dplyr::if_else(
+        .data$is_lecture | (.data$lecture_sch > 0 & .data$lab_sch == 0),
+        .data$enrl,
+        0
+      )
+    ) |>
+    dplyr::filter(
+      .data$lecture_enrl > 0 |
+        .data$lab_enrl > 0 |
+        .data$lecture_sch > 0 |
+        .data$lab_sch > 0
     ) |>
     dplyr::select(
       "section",
@@ -379,23 +491,23 @@ sch_term_to_yearterm <- function(term) {
 # filter the course summary by term and course level
 # @param df course summary from sch_summarize_courses()
 # @param include_summer whether to include summer terms
-# @param include_grad whether to include graduate courses (if FALSE, only
-#   GRAD_UG == "UG" are included). Note: this might not be necessary since
-#   cross-listed graduate sections carry no SCH of their own (graduate
-#   students in UG-sponsored classes are counted either way) but kept for now.
-# @param include_grad_field whether to include graduate field classes
-#   (GRAD_UG == "Grad" with an FLD activity type), only relevant if
-#   include_grad = TRUE
+# @param include_grad whether to include grad-only courses (graduate sponsored
+#   courses, GRAD_UG == "Grad"), these never have SCH (graduate students in
+#   UG-sponsored classes are counted either way) so this only affects the
+#   enrollment
 # @param from first semester to include (e.g. "Fall 2016"), NULL for no limit
 # @param to last semester to include (e.g. "Spring 2026"), NULL for no limit
+# @param sponsored_only whether to only include courses sponsored by GEOL/ERTH
+#   (if FALSE, courses sponsored by other departments that are taught by GEOL
+#   instructors are included as well, e.g. ASTR2040)
 # @return the filtered data frame
 sch_filter_courses <- function(
   df,
   include_summer = TRUE,
   include_grad = FALSE,
-  include_grad_field = FALSE,
   from = NULL,
-  to = NULL
+  to = NULL,
+  sponsored_only = FALSE
 ) {
   from_yearterm <- if (is.null(from)) -Inf else sch_term_to_yearterm(from)
   to_yearterm <- if (is.null(to)) Inf else sch_term_to_yearterm(to)
@@ -403,9 +515,8 @@ sch_filter_courses <- function(
     dplyr::filter(
       include_summer | !stringr::str_detect(.data$TERM, "Summer"),
       include_grad | .data$GRAD_UG == "UG",
-      include_grad_field |
-        !(.data$GRAD_UG == "Grad" & stringr::str_detect(.data$ACTVTYP, "FLD")),
-      dplyr::between(as.integer(.data$YearTerm), from_yearterm, to_yearterm)
+      dplyr::between(as.integer(.data$YearTerm), from_yearterm, to_yearterm),
+      !sponsored_only | .data$sponsored
     )
 }
 
@@ -434,7 +545,6 @@ sch_period_value_cols <- c(
   "SP_SCH",
   "lecture_sch",
   "lab_sch",
-  "other_sch",
   "lecture_enrl",
   "lab_enrl",
   "lecture_ta",
@@ -454,7 +564,6 @@ sch_find_missing_years <- function(df, from = NULL, to = NULL) {
     sch_filter_courses(
       include_summer = FALSE,
       include_grad = TRUE,
-      include_grad_field = TRUE,
       from = from,
       to = to
     ) |>
@@ -622,21 +731,29 @@ sch_find_classes <- function(df, code) {
 
 # select classes by their modern course code
 # @param df course summary from sch_summarize_courses()
-# @param classes course codes (e.g. c("ERTH1010", "ERTH1030")), matched by
-#   course number so they include the classes' GEOL versions, NULL for all
+# @param classes course codes (e.g. c("ERTH1010", "ASTR2040")), matched
+#   against all (cross-listed) course codes of the classes in their modern
+#   form so they include the classes' GEOL versions, NULL for all
 # @return the selected classes
 sch_select_classes <- function(df, classes = NULL) {
   if (length(classes) == 0) {
     return(df)
   }
-  missing <- classes[!stringr::str_sub(classes, 5) %in% df$Class]
+  codes <- df |>
+    dplyr::distinct(.data$Class, .data$Courses) |>
+    dplyr::mutate(
+      code = stringr::str_split(sch_modernize_codes(.data$Courses), "/")
+    ) |>
+    tidyr::unnest("code") |>
+    dplyr::distinct(.data$Class, .data$code)
+  missing <- setdiff(classes, codes$code)
   if (length(missing) > 0) {
     abort(paste(
       "classes not found in the data:",
       paste(missing, collapse = ", ")
     ))
   }
-  df |> dplyr::filter(.data$Class %in% stringr::str_sub(classes, 5))
+  df |> dplyr::filter(.data$Class %in% codes$Class[codes$code %in% classes])
 }
 
 # class types: lab/field classes (coded as MLS or FLD) and all other classes
@@ -658,8 +775,8 @@ sch_add_class_type <- function(df) {
     dplyr::mutate(
       class_type = dplyr::case_when(
         stringr::str_detect(.data$ACTVTYP, "MLS|FLD") ~ "lab/field (MLS, FLD)",
-        stringr::str_sub(.data$Class, 1, 1) %in% c("1", "2", "3", "4") ~
-          paste0(stringr::str_sub(.data$Class, 1, 1), "000 level"),
+        stringr::str_extract(.data$Class, "[0-9]") %in% c("1", "2", "3", "4") ~
+          paste0(stringr::str_extract(.data$Class, "[0-9]"), "000 level"),
         .default = "graduate (5000+)"
       ) |>
         factor(levels = sch_class_types)
@@ -679,11 +796,11 @@ sch_prepare_data <- function(
   classes = NULL,
   period = "semester",
   n_years = 3,
-  from = "Fall 2018",
+  from = sch_default_from,
   to = NULL,
   include_summer = FALSE,
   include_grad = TRUE,
-  include_grad_field = FALSE
+  sponsored_only = FALSE
 ) {
   # the periods (complete academic years and running average windows) are
   # determined from all courses before selecting classes, otherwise classes
@@ -692,9 +809,9 @@ sch_prepare_data <- function(
     sch_filter_courses(
       include_summer,
       include_grad,
-      include_grad_field,
       from,
-      to
+      to,
+      sponsored_only
     ) |>
     sch_calculate_ta_equivalents() |>
     sch_add_class_type() |>
@@ -748,11 +865,11 @@ sch_summarize_classes <- function(
   classes = NULL,
   period = "semester",
   n_years = 3,
-  from = "Fall 2018",
+  from = sch_default_from,
   to = NULL,
   include_summer = FALSE,
   include_grad = TRUE,
-  include_grad_field = FALSE
+  sponsored_only = FALSE
 ) {
   df |>
     sch_prepare_data(
@@ -763,7 +880,7 @@ sch_summarize_classes <- function(
       to,
       include_summer,
       include_grad,
-      include_grad_field
+      sponsored_only
     ) |>
     sch_summarize_values(by = "Class") |>
     dplyr::left_join(
@@ -794,11 +911,11 @@ sch_summarize_class_types <- function(
   classes = NULL,
   period = "semester",
   n_years = 3,
-  from = "Fall 2018",
+  from = sch_default_from,
   to = NULL,
   include_summer = FALSE,
   include_grad = TRUE,
-  include_grad_field = FALSE
+  sponsored_only = FALSE
 ) {
   df |>
     sch_prepare_data(
@@ -809,7 +926,7 @@ sch_summarize_class_types <- function(
       to,
       include_summer,
       include_grad,
-      include_grad_field
+      sponsored_only
     ) |>
     sch_summarize_values(by = "class_type")
 }
@@ -823,11 +940,11 @@ sch_summarize_total <- function(
   classes = NULL,
   period = "semester",
   n_years = 3,
-  from = "Fall 2018",
+  from = sch_default_from,
   to = NULL,
   include_summer = FALSE,
   include_grad = TRUE,
-  include_grad_field = FALSE
+  sponsored_only = FALSE
 ) {
   df |>
     sch_prepare_data(
@@ -838,7 +955,7 @@ sch_summarize_total <- function(
       to,
       include_summer,
       include_grad,
-      include_grad_field
+      sponsored_only
     ) |>
     sch_summarize_values()
 }
@@ -902,10 +1019,10 @@ sch_prepare_plot_data <- function(
   classes = NULL,
   period = "semester",
   n_years = 3,
-  from = "Fall 2018",
+  from = sch_default_from,
   to = NULL,
   include_grad = TRUE,
-  include_grad_field = FALSE
+  sponsored_only = FALSE
 ) {
   df <- df |>
     sch_prepare_data(
@@ -916,7 +1033,7 @@ sch_prepare_plot_data <- function(
       to,
       include_summer = FALSE,
       include_grad,
-      include_grad_field
+      sponsored_only
     )
 
   sch_plot_values |>
@@ -1066,9 +1183,11 @@ sch_merge_segments <- function(df, merge = TRUE) {
 #   sch_calculate_ta_equivalents())
 # @param top_based_on which value ("enrollment", "SCH" or "TA") determines the
 #   top classes, by default the first of the `values`
-# @param n_top number of classes with the highest lecture + lab `top_based_on`
-#   value (over all shown periods) to show individually, the rest are combined
-#   as "other"
+# @param n_top number of classes with the highest average lecture + lab
+#   `top_based_on` value per semester in which they were taught (among the
+#   semesters of the shown periods, independent of the period type, so classes
+#   that are taught only occasionally but with high enrollment, e.g. ERTH2040,
+#   are included) to show individually, the rest are combined as "other"
 # @param show_other whether to include the "other" classes
 # @return data frame from sch_summarize_bars() where group is the class
 #   (in order of course number, "other" last)
@@ -1078,13 +1197,13 @@ sch_summarize_top_classes <- function(
   top_based_on = values[1],
   classes = NULL,
   n_top = 5,
-  show_other = TRUE,
+  show_other = FALSE,
   period = "semester",
   n_years = 3,
-  from = "Fall 2018",
+  from = sch_default_from,
   to = NULL,
   include_grad = TRUE,
-  include_grad_field = FALSE
+  sponsored_only = FALSE
 ) {
   values <- sch_match_values(values)
   top_based_on <- sch_match_values(top_based_on)
@@ -1096,6 +1215,7 @@ sch_summarize_top_classes <- function(
   }
 
   class_labels <- sch_label_classes(df)
+  df_all <- df
   df <- df |>
     sch_prepare_plot_data(
       union(values, top_based_on),
@@ -1105,14 +1225,27 @@ sch_summarize_top_classes <- function(
       from,
       to,
       include_grad,
-      include_grad_field
+      sponsored_only
     )
 
-  # top classes by lecture + lab of the top_based_on value
-  top_classes <- df |>
-    dplyr::filter(.data$value == top_based_on) |>
-    dplyr::summarize(total = sum(.data$lecture + .data$lab), .by = "Class") |>
-    dplyr::slice_max(.data$total, n = n_top, with_ties = FALSE) |>
+  # top classes by the average lecture + lab top_based_on value per semester
+  # in which the class was taught (among the semesters of the shown periods)
+  top_classes <- sch_prepare_plot_data(
+    df_all,
+    top_based_on,
+    classes,
+    period = "semester",
+    from = from,
+    to = to,
+    include_grad = include_grad,
+    sponsored_only = sponsored_only
+  ) |>
+    dplyr::filter(.data$TERM %in% df$TERM) |>
+    dplyr::summarize(
+      average = sum(.data$lecture + .data$lab) / dplyr::n_distinct(.data$TERM),
+      .by = "Class"
+    ) |>
+    dplyr::slice_max(.data$average, n = n_top, with_ties = FALSE) |>
     dplyr::left_join(class_labels, by = "Class") |>
     dplyr::arrange(.data$Class)
   groups <- c(
@@ -1359,13 +1492,13 @@ sch_plot_top_classes <- function(
   top_based_on = values[1],
   classes = NULL,
   n_top = 5,
-  show_other = TRUE,
+  show_other = FALSE,
   period = "semester",
   n_years = 3,
-  from = "Fall 2018",
+  from = sch_default_from,
   to = NULL,
   include_grad = TRUE,
-  include_grad_field = FALSE,
+  sponsored_only = FALSE,
   show_class_numbers = TRUE,
   n_breaks = 5,
   bar_width = 0.85,
@@ -1384,7 +1517,7 @@ sch_plot_top_classes <- function(
       from,
       to,
       include_grad,
-      include_grad_field
+      sponsored_only
     )
 
   groups <- levels(plot_df$group)
@@ -1433,10 +1566,10 @@ sch_plot_class_types <- function(
   classes = NULL,
   period = "semester",
   n_years = 3,
-  from = "Fall 2018",
+  from = sch_default_from,
   to = NULL,
   include_grad = TRUE,
-  include_grad_field = FALSE,
+  sponsored_only = FALSE,
   n_breaks = 5,
   bar_width = 0.85,
   base_size = 12
@@ -1450,7 +1583,7 @@ sch_plot_class_types <- function(
       from,
       to,
       include_grad,
-      include_grad_field
+      sponsored_only
     ) |>
     dplyr::mutate(group = .data$class_type) |>
     # (no segments for running averages)
@@ -1490,10 +1623,10 @@ sch_plot_total <- function(
   classes = NULL,
   period = "semester",
   n_years = 3,
-  from = "Fall 2018",
+  from = sch_default_from,
   to = NULL,
   include_grad = TRUE,
-  include_grad_field = FALSE,
+  sponsored_only = FALSE,
   n_breaks = 5,
   bar_width = 0.6,
   base_size = 12
@@ -1508,7 +1641,7 @@ sch_plot_total <- function(
       from,
       to,
       include_grad,
-      include_grad_field
+      sponsored_only
     ) |>
     dplyr::mutate(group = factor(group)) |>
     # (no segments for running averages)
@@ -1572,7 +1705,6 @@ sch_format_courses <- function(courses, class_labels) {
       sch = .data$SP_SCH,
       lecture_sch = .data$lecture_sch,
       lab_sch = .data$lab_sch,
-      other_sch = .data$other_sch,
       ta = .data$ta,
       lecture_ta = .data$lecture_ta,
       lab_ta = .data$lab_ta
@@ -1633,10 +1765,10 @@ sch_get_export_data <- function(
   classes = NULL,
   period = "semester",
   n_years = 3,
-  from = "Fall 2018",
+  from = sch_default_from,
   to = NULL,
   include_grad = TRUE,
-  include_grad_field = FALSE
+  sponsored_only = FALSE
 ) {
   plot_type <- arg_match(plot_type)
   summarize_func <- switch(
@@ -1654,7 +1786,7 @@ sch_get_export_data <- function(
     to = to,
     include_summer = FALSE,
     include_grad = include_grad,
-    include_grad_field = include_grad_field
+    sponsored_only = sponsored_only
   ) |>
     dplyr::mutate(period = as.character(.data$period)) |>
     sch_round_values()
@@ -1681,7 +1813,7 @@ sch_get_export_data <- function(
       to = to,
       include_summer = FALSE,
       include_grad = include_grad,
-      include_grad_field = include_grad_field
+      sponsored_only = sponsored_only
     )
   list(
     summary = summary,
@@ -1761,10 +1893,10 @@ sch_get_bar_details <- function(
   classes = NULL,
   period = "semester",
   n_years = 3,
-  from = "Fall 2018",
+  from = sch_default_from,
   to = NULL,
   include_grad = TRUE,
-  include_grad_field = FALSE
+  sponsored_only = FALSE
 ) {
   plot_type <- arg_match(plot_type)
   class_labels <- sch_label_classes(df)
@@ -1778,7 +1910,7 @@ sch_get_bar_details <- function(
       to,
       include_summer = FALSE,
       include_grad,
-      include_grad_field
+      sponsored_only
     )
   }
 

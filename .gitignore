@@ -24,6 +24,11 @@ Thumbs.db
 credentials.R
 *.xlsx
 *.csv
+*.pdf
 
 # ruby (dev autoreload)
 Gemfile.lock
+tmp
+
+# enrollment data cache
+*.rds

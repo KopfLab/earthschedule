@@ -51,7 +51,11 @@ module_stats_server <- function(
         server = TRUE
       )
       semesters <- sch_get_semesters(courses)
-      default_from <- if ("Fall 2018" %in% semesters) "Fall 2018" else semesters[1]
+      default_from <- if (sch_default_from %in% semesters) {
+        sch_default_from
+      } else {
+        semesters[1]
+      }
       updateSelectInput(
         session,
         "from",
@@ -116,8 +120,8 @@ module_stats_server <- function(
         n_years = input$n_years,
         from = input$from,
         to = to,
-        include_grad = input$include_grad,
-        include_grad_field = input$include_grad && input$include_grad_field,
+        include_grad = !isTRUE(input$exclude_grad),
+        sponsored_only = input$sponsored_only,
         n_breaks = input$n_breaks
       )
     }) |>
@@ -175,7 +179,7 @@ module_stats_server <- function(
         from = params$from,
         to = params$to,
         include_grad = params$include_grad,
-        include_grad_field = params$include_grad_field,
+        sponsored_only = params$sponsored_only,
         n_breaks = params$n_breaks,
         base_size = 13
       )
@@ -244,7 +248,7 @@ module_stats_server <- function(
           from = params$from,
           to = params$to,
           include_grad = params$include_grad,
-          include_grad_field = params$include_grad_field
+          sponsored_only = params$sponsored_only
         ),
         error = function(e) {
           log_error(
@@ -311,7 +315,7 @@ module_stats_server <- function(
           from = params$from,
           to = params$to,
           include_grad = params$include_grad,
-          include_grad_field = params$include_grad_field
+          sponsored_only = params$sponsored_only
         )
         writexl::write_xlsx(tables, path = filename)
       }
@@ -387,14 +391,14 @@ module_stats_sidebar <- function(id) {
         step = 1
       ),
       checkboxInput(
-        ns("show_other"),
-        "Show other",
-        value = TRUE
-      ),
-      checkboxInput(
         ns("show_class_numbers"),
         "Show class numbers on plot",
         value = TRUE
+      ),
+      checkboxInput(
+        ns("show_other"),
+        'Show "other" summary',
+        value = FALSE
       ),
       selectizeInput(
         ns("classes"),
@@ -407,19 +411,21 @@ module_stats_sidebar <- function(id) {
     selectInput(ns("from"), "From semester", choices = NULL),
     selectInput(ns("to"), "To semester", choices = NULL),
     checkboxInput(
-      ns("include_grad"),
-      "Include graduate classes",
-      value = TRUE
-    ),
-    conditionalPanel(
-      "input.include_grad",
-      ns = ns,
-      checkboxInput(
-        ns("include_grad_field"),
-        "Include graduate field classes",
-        value = FALSE
-      )
-    ),
+      ns("exclude_grad"),
+      "Exclude grad-only classes",
+      value = FALSE
+    ) |>
+      add_tooltip(
+        "Exclude graduate sponsored classes. These never have SCH (graduate students in undergraduate sponsored classes always count), so this only affects the enrollment."
+      ),
+    checkboxInput(
+      ns("sponsored_only"),
+      "Exclude unsponsored classes",
+      value = FALSE
+    ) |>
+      add_tooltip(
+        "Only include classes sponsored by GEOL/ERTH. If not checked, classes sponsored by other departments but taught by GEOL faculty (e.g. ASTR2040/ERTH2040) are included as well."
+      ),
     numericInput(
       ns("n_breaks"),
       "Number of y-axis breaks",
@@ -476,11 +482,11 @@ module_stats_ui <- function(id) {
       "Click on a bar or one of its sections/classes to see its details. ",
       "A # above a bar means the class has a teaching assistant (in at least one semester for academic years and running averages), this information is likely incomplete and cannot distinguish between 25% and 50% TAs. ",
       sprintf(
-        "SCH of LEC, REC and SEM sections count as lecture SCH, of MLS, LAB and FLD sections as lab SCH, lecture sections of classes with lab sections (LEC+LAB) count 1 lab credit hour per student. Other SCH (DIS, THE, IND, OTH) is not included. 1 TA equivalent = %s lecture SCH or %s lab SCH. ",
+        "1 TA equivalent = %s lecture SCH or %s lab SCH. ",
         sch_per_ta_lecture,
         sch_per_ta_lab
       ),
-      "Summers are not included, academic years are fall + spring (e.g. AY24 = Fall 2023 + Spring 2024) and only complete academic years are shown. ",
+      "Summers are not included, academic years are fall + spring (e.g. AY24 = Fall 2023 + Spring 2024). ",
       uiOutput(ns("missing_years"), inline = TRUE),
       "Classes are matched by course number across the GEOL to ERTH rename."
     )
@@ -498,7 +504,11 @@ stats_html_table <- function(df, highlight = rep(FALSE, nrow(df))) {
       return(ifelse(is.na(x), "", ifelse(x, "yes", "no")))
     }
     if (is.numeric(x)) {
-      return(format(x, big.mark = ",", trim = TRUE, drop0trailing = TRUE))
+      return(ifelse(
+        is.na(x),
+        "",
+        format(x, big.mark = ",", trim = TRUE, drop0trailing = TRUE)
+      ))
     }
     dplyr::coalesce(as.character(x), "")
   }
@@ -524,19 +534,27 @@ stats_html_table <- function(df, highlight = rep(FALSE, nrow(df))) {
 # @param details list from sch_get_bar_details() plus period_type
 stats_details_ui <- function(details) {
   value_labels <- stats::setNames(sch_plot_values$label, sch_plot_values$value)
+  # (only the total enrollment, students can be in both lecture and lab)
   bar_values <- details$values |>
     dplyr::transmute(
+      # (enrollment and SCH as integers, TA equivalents with 2 digits)
+      digits = dplyr::if_else(as.character(.data$value) == "TA", 2, 0),
+      is_enrl = as.character(.data$value) == "enrollment",
       value = value_labels[as.character(.data$value)],
-      lecture = round(.data$lecture, 2),
-      lab = round(.data$lab, 2),
-      total = .data$lecture + .data$lab
-    )
+      total = round(.data$lecture + .data$lab, .data$digits),
+      lecture = dplyr::if_else(
+        .data$is_enrl,
+        NA,
+        round(.data$lecture, .data$digits)
+      ),
+      lab = dplyr::if_else(.data$is_enrl, NA, round(.data$lab, .data$digits))
+    ) |>
+    dplyr::select("value", "lecture", "lab", "total")
   single_class <- dplyr::n_distinct(details$courses$course) == 1
   multi_term <- dplyr::n_distinct(details$courses$term) > 1
   tagList(
     h4(details$title),
     h6(class = "text-muted", details$subtitle),
-    if (!is.null(details$section)) h6(paste("Section", details$section)),
     div(class = "mt-3", stats_html_table(bar_values)),
     if (details$period_type == "running") {
       p(class = "small text-muted", "Values are averages per academic year, the tables below list the totals of all semesters.")
