@@ -122,6 +122,7 @@ module_stats_server <- function(
         to = to,
         include_grad = !isTRUE(input$exclude_grad),
         sponsored_only = input$sponsored_only,
+        exclude_non_erth = input$exclude_non_erth,
         n_breaks = input$n_breaks
       )
     }) |>
@@ -180,6 +181,7 @@ module_stats_server <- function(
         to = params$to,
         include_grad = params$include_grad,
         sponsored_only = params$sponsored_only,
+        exclude_non_erth = params$exclude_non_erth,
         n_breaks = params$n_breaks,
         base_size = 13
       )
@@ -248,7 +250,8 @@ module_stats_server <- function(
           from = params$from,
           to = params$to,
           include_grad = params$include_grad,
-          sponsored_only = params$sponsored_only
+          sponsored_only = params$sponsored_only,
+          exclude_non_erth = params$exclude_non_erth
         ),
         error = function(e) {
           log_error(
@@ -274,7 +277,7 @@ module_stats_server <- function(
           "Click on a bar or one of its sections/classes to see its details."
         ))
       }
-      stats_details_ui(details)
+      stats_details_ui(details, id = ns("details"))
     })
 
     # downloads =====
@@ -315,7 +318,8 @@ module_stats_server <- function(
           from = params$from,
           to = params$to,
           include_grad = params$include_grad,
-          sponsored_only = params$sponsored_only
+          sponsored_only = params$sponsored_only,
+          exclude_non_erth = params$exclude_non_erth
         )
         writexl::write_xlsx(tables, path = filename)
       }
@@ -426,6 +430,14 @@ module_stats_sidebar <- function(id) {
       add_tooltip(
         "Only include classes sponsored by GEOL/ERTH. If not checked, classes sponsored by other departments but taught by GEOL faculty (e.g. ASTR2040/ERTH2040) are included as well."
       ),
+    checkboxInput(
+      ns("exclude_non_erth"),
+      "Exclude non-ERTH instructors",
+      value = TRUE
+    ) |>
+      add_tooltip(
+        "Exclude the sections whose primary instructor is not in GEOL/ERTH (InstDept1 of the sponsoring section), incl. their enrollment and lab/field SCH. Their SCH never counts as lecture SCH either way."
+      ),
     numericInput(
       ns("n_breaks"),
       "Number of y-axis breaks",
@@ -530,91 +542,101 @@ stats_html_table <- function(df, highlight = rep(FALSE, nrow(df))) {
   )
 }
 
-# the details of a clicked bar or segment
+# the details of a clicked bar
 # @param details list from sch_get_bar_details() plus period_type
-stats_details_ui <- function(details) {
-  value_labels <- stats::setNames(sch_plot_values$label, sch_plot_values$value)
+# @param id id of the details output (to scroll to the highlighted sections)
+stats_details_ui <- function(details, id = NULL) {
+  value_labels <- c(
+    enrollment = "Enrollment",
+    SCH = "Student Credit Hours (SCH)",
+    TA = "TA Equivalents"
+  )
   # (only the total enrollment, students can be in both lecture and lab)
   bar_values <- details$values |>
     dplyr::transmute(
       # (enrollment and SCH as integers, TA equivalents with 2 digits)
       digits = dplyr::if_else(as.character(.data$value) == "TA", 2, 0),
       is_enrl = as.character(.data$value) == "enrollment",
-      value = value_labels[as.character(.data$value)],
-      total = round(.data$lecture + .data$lab, .data$digits),
-      lecture = dplyr::if_else(
+      Value = value_labels[as.character(.data$value)],
+      Lecture = dplyr::if_else(
         .data$is_enrl,
         NA,
         round(.data$lecture, .data$digits)
       ),
-      lab = dplyr::if_else(.data$is_enrl, NA, round(.data$lab, .data$digits))
+      "Lab/Field" = dplyr::if_else(
+        .data$is_enrl,
+        NA,
+        round(.data$lab, .data$digits)
+      ),
+      Total = round(.data$lecture + .data$lab, .data$digits)
     ) |>
-    dplyr::select("value", "lecture", "lab", "total")
-  single_class <- dplyr::n_distinct(details$courses$course) == 1
-  multi_term <- dplyr::n_distinct(details$courses$term) > 1
+    dplyr::select("Value", "Lecture", "Lab/Field", "Total")
+
+  sections <- details$sections
+  multi_class <- dplyr::n_distinct(sections$course) > 1
+  multi_term <- dplyr::n_distinct(sections$term) > 1
+  highlight <- sections$section %in% details$highlight
+  sections_table <- sections |>
+    dplyr::transmute(
+      Term = .data$term,
+      Section = if (multi_class) {
+        # (e.g. ERTH1010-001)
+        stringr::str_replace(.data$section, "^([A-Z]{4}[0-9]{4})", "\\1-")
+      } else {
+        .data$section_number
+      },
+      Activity = .data$activity,
+      Enrollment = .data$enrl,
+      Cap = .data$max_enrl,
+      SCH = .data$lecture_sch,
+      "Lab/Field SCH" = .data$lab_sch,
+      Instructors = .data$instructors,
+      Dept = .data$inst_dept,
+      TAs = .data$tas
+    )
+  if (!multi_term) {
+    sections_table <- sections_table |> dplyr::select(-"Term")
+  }
+
   tagList(
     h4(details$title),
     h6(class = "text-muted", details$subtitle),
     div(class = "mt-3", stats_html_table(bar_values)),
     if (details$period_type == "running") {
-      p(class = "small text-muted", "Values are averages per academic year, the tables below list the totals of all semesters.")
+      p(
+        class = "small text-muted",
+        "Values are averages per academic year, the tables below list all semesters."
+      )
     },
-    if (!single_class) {
+    if (multi_class) {
       tagList(
         h5(class = "mt-3", "Classes"),
         stats_html_table(
           details$classes |>
             dplyr::select(
-              "course",
-              "title",
-              if (multi_term) "semesters",
-              "enrl",
-              "sch",
-              "ta",
-              "has_ta"
-            ) |>
-            dplyr::rename(
               Course = "course",
               Title = "title",
-              Enrl = "enrl",
-              SCH = "sch",
-              "TA eq." = "ta",
+              if (multi_term) c(Semesters = "semesters"),
+              Enrollment = "enrl",
+              SCH = "lecture_sch",
+              "Lab/Field SCH" = "lab_sch",
+              "TA Eq." = "ta",
               TA = "has_ta"
             )
         )
       )
-    } else {
-      tagList(
-        h5(class = "mt-3", "Courses"),
-        stats_html_table(
-          details$courses |>
-            dplyr::select(
-              Term = "term",
-              Courses = "cross_listed",
-              Activity = "activity",
-              Enrl = "enrl",
-              SCH = "sch",
-              "TA eq." = "ta",
-              TA = "has_ta"
-            )
-        ),
-        h5(class = "mt-3", "Sections"),
-        stats_html_table(
-          details$sections |>
-            dplyr::select(
-              Term = "term",
-              Section = "section_number",
-              Activity = "activity",
-              Enrl = "enrl",
-              Cap = "max_enrl",
-              SCH = "sch",
-              Instructors = "instructors",
-              TAs = "tas"
-            ),
-          highlight = !is.null(details$section) &
-            details$sections$section %in% details$section
-        )
-      )
+    },
+    h5(class = "mt-3", "Sections"),
+    stats_html_table(sections_table, highlight = highlight),
+    # scroll to the (first) highlighted section
+    if (!is.null(id) && any(highlight)) {
+      tags$script(HTML(sprintf(
+        "setTimeout(function() {
+          var row = document.querySelector('#%s tr.table-warning');
+          if (row) row.scrollIntoView({block: 'center', behavior: 'smooth'});
+        }, 200);",
+        id
+      )))
     }
   )
 }
